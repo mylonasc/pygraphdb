@@ -14,7 +14,7 @@ A pure python GraphDB for attributed graphs.
     lmdb_store = LMDBStore(path='graph_lmdb_example')
     serializer = PickleSerializer()
 
-    # 2. Create the GraphDB (no conditionals inside!)
+    # 2. Create the GraphDB 
     graph_db = GraphDB(lmdb_store, serializer)
 
     # 3. Create and put a Node
