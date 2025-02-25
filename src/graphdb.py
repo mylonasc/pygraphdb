@@ -3,6 +3,7 @@ import pickle
 import json
 import os
 import uuid
+from typing import List
 from kvstores import KVStore
 from serializers import Serializer
 
@@ -186,6 +187,133 @@ class GraphDB:
             else:
                 results.append(None)  # or skip it
         return results
+    
+    # -----------------------
+    # Adjacency Management
+    # -----------------------
+    def _append_edge_to_adjacency(self, node_id: str, edge_id: str):
+        """
+        Internal helper: read the adjacency list for node_id,
+        append edge_id if not present, and write it back.
+        """
+        edges_list = self.get_adjacency_list(node_id)
+        if edge_id not in edges_list:
+            edges_list.append(edge_id)
+            self.put_adjacency_list(node_id, edges_list)
+
+    def get_adjacency_list(self, node_id: str) -> list[str]:
+        """
+        Returns the list of edge IDs connected to node_id.
+        If none found, returns an empty list.
+        """
+        raw = self.store.get_adjacency(node_id)
+        if raw is None:
+            return []
+        return self.serializer.deserialize(raw)  # Expecting a list[str]
+
+    def put_adjacency_list(self, node_id: str, edges_list: list[str]):
+        """Stores the adjacency list for node_id."""
+        raw = self.serializer.serialize(edges_list)
+        self.store.put_adjacency(node_id, raw)
+
+    # -----------------------
+    # Deletion (Optional)
+    # -----------------------
+    def delete_edge(self, edge_id: str):
+        """
+        Removes the edge from the edge store, and from adjacency
+        of both source and target nodes. If either node doesn't exist,
+        we skip gracefully.
+        """
+        e = self.get_edge(edge_id)
+        if not e:
+            return  # Edge not found
+
+        # Remove edge_id from adjacency of source
+        self._remove_edge_from_adjacency(e.source, edge_id)
+        # Remove edge_id from adjacency of target
+        if e.target != e.source:
+            self._remove_edge_from_adjacency(e.target, edge_id)
+
+        # If your store had a 'delete_edge' method, you'd call it here.
+        # We'll assume you add that to KVStore if needed, e.g.:
+        self.store.delete_edge(edge_id)
+
+    def _remove_edge_from_adjacency(self, node_id: str, edge_id: str):
+        adj_list = self.get_adjacency_list(node_id)
+        if edge_id in adj_list:
+            adj_list.remove(edge_id)
+            self.put_adjacency_list(node_id, adj_list)
+
+    # -----------------------
+    # BFS Example
+    # -----------------------
+    def bfs(self, start_node_id: str) -> list[str]:
+        """
+        Returns a list of node_ids in BFS order starting from `start_node_id`.
+        Demonstrates how adjacency is used for graph traversal.
+        """
+        visited = set()
+        queue = [start_node_id]
+        result = []
+
+        while queue:
+            current = queue.pop(0)
+            if current in visited:
+                continue
+            visited.add(current)
+            result.append(current)
+
+            # 1) get adjacency list for current
+            edges_list = self.get_adjacency_list(current)
+            # 2) for each edge in adjacency, find the other node
+            for e_id in edges_list:
+                edge_obj = self.get_edge(e_id)
+                if not edge_obj:
+                    continue
+                neighbor = (
+                    edge_obj.target if edge_obj.source == current else edge_obj.source
+                )
+                if neighbor not in visited:
+                    queue.append(neighbor)
+
+        return result
+
+    def put_edges_bulk(self, edges: List[Edge]):
+        # 1) Build a dict[edge_id, bytes] to store all edges in one go
+        edge_dict = {}
+        # 2) Accumulate adjacency changes in memory: node_id -> set(edge_ids)
+        adjacency_accumulator = {}
+
+        for e in edges:
+            e_bytes = self.serializer.serialize(e.to_dict())
+            edge_dict[e.get_id] = e_bytes
+            
+            # adjacency
+            adjacency_accumulator.setdefault(e.source, set()).add(e.get_id)
+            if e.source != e.target:
+                adjacency_accumulator.setdefault(e.target, set()).add(e.get_id)
+
+        # 3) Use the store's put_edges_bulk
+        self.store.put_edges_bulk(edge_dict)
+
+        # 4) Build adjacency dict so we do one read+write per node
+        #    node_id -> final adjacency (existing + new edges)
+        final_adjacency = {}
+
+        # For each node in adjacency_accumulator, fetch old adjacency,
+        # union with new edges, and store in final_adjacency dict
+        for node_id, new_edges in adjacency_accumulator.items():
+            raw_adj = self.store.get_adjacency(node_id)
+            if raw_adj is None:
+                old_edges = set()
+            else:
+                old_edges = set(self.serializer.deserialize(raw_adj))
+            updated = old_edges.union(new_edges)
+            final_adjacency[node_id] = self.serializer.serialize(list(updated))
+
+        # 5) One batch write for adjacency
+        self.store.put_adjacency_bulk(final_adjacency)
 
     def close(self):
         self.store.close()

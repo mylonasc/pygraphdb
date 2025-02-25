@@ -1,5 +1,6 @@
 import lmdb
 import plyvel
+from typing import Optional, Dict, List
 import os
 
 
@@ -70,11 +71,21 @@ class KVStore:
 
 class LMDBStore(KVStore):
     def __init__(self, path='graph_lmdb', map_size=10_485_760):
-        """Initialize an LMDB environment.\n        `map_size` is the maximum size the database can grow to."""
-        self.env = lmdb.open(path, map_size=map_size, subdir=True, max_dbs=2)
-        # Create separate sub-databases for nodes and edges
+        """
+        Creates/opens an LMDB environment with three named sub-databases:
+          - b'nodes' for node data
+          - b'edges' for edge data
+          - b'adj'   for adjacency lists
+        """
+        self.env = lmdb.open(path, map_size=map_size, subdir=True, max_dbs=3)
         self.nodes_db = self.env.open_db(b'nodes')
         self.edges_db = self.env.open_db(b'edges')
+        self.adj_db   = self.env.open_db(b'adj')
+        # """Initialize an LMDB environment.\n        `map_size` is the maximum size the database can grow to."""
+        # self.env = lmdb.open(path, map_size=map_size, subdir=True, max_dbs=2)
+        # # Create separate sub-databases for nodes and edges
+        # self.nodes_db = self.env.open_db(b'nodes')
+        # self.edges_db = self.env.open_db(b'edges')
 
     # -- Basic methods (not used by GraphDB if we rely on specialized node/edge methods below)
     def put(self, key: bytes, value: bytes):
@@ -128,7 +139,7 @@ class LMDBStore(KVStore):
     def delete_edge(self, edge_id: str):
         with self.env.begin(write=True, db=self.edges_db) as txn:
             txn.delete(edge_id.encode('utf-8'))
-            
+
     def put_nodes_bulk(self, keys_and_values: dict[str, bytes]):
         """Write a batch of nodes in a single transaction."""
         with self.env.begin(write=True, db=self.nodes_db) as txn:
@@ -157,6 +168,43 @@ class LMDBStore(KVStore):
                 data = txn.get(edge_id.encode('utf-8'))
                 if data is not None:
                     results[edge_id] = data
+        return results
+    
+    # ----- Adjacency Methods -----
+    def put_adjacency(self, node_id: str, value: bytes) -> None:
+        with self.env.begin(write=True, db=self.adj_db) as txn:
+            txn.put(node_id.encode('utf-8'), value)
+
+    def get_adjacency(self, node_id: str) -> Optional[bytes]:
+        with self.env.begin(write=False, db=self.adj_db) as txn:
+            return txn.get(node_id.encode('utf-8'))
+
+    # -------------------------------------------------------------------------
+    # Bulk Write: Adjacency
+    # -------------------------------------------------------------------------
+    def put_adjacency_bulk(self, adj_dict: Dict[str, bytes]) -> None:
+        """
+        Insert/update multiple adjacency lists in one transaction.
+        :param adj_dict: a dict mapping node_id -> serialized adjacency (list of edges)
+        """
+        with self.env.begin(write=True, db=self.adj_db) as txn:
+            for node_id, val in adj_dict.items():
+                txn.put(node_id.encode('utf-8'), val)
+
+    # -------------------------------------------------------------------------
+    # Bulk Read: Adjacency
+    # -------------------------------------------------------------------------
+    def get_adjacency_bulk(self, node_ids: List[str]) -> Dict[str, bytes]:
+        """
+        Retrieve multiple adjacency lists in a single read transaction.
+        Returns a dict { node_id: serialized adjacency } for all found items.
+        """
+        results = {}
+        with self.env.begin(write=False, db=self.adj_db) as txn:
+            for node_id in node_ids:
+                data = txn.get(node_id.encode('utf-8'))
+                if data is not None:
+                    results[node_id] = data
         return results
 
 
@@ -242,3 +290,13 @@ class LevelDBStore(KVStore):
             if data is not None:
                 results[edge_id] = data
         return results
+    
+
+    # ----- Adjacency Methods -----
+    def put_adjacency(self, node_id: str, value: bytes) -> None:
+        key = f"A:{node_id}".encode('utf-8')
+        self.db.put(key, value)
+
+    def get_adjacency(self, node_id: str) -> Optional[bytes]:
+        key = f"A:{node_id}".encode('utf-8')
+        return self.db.get(key)
