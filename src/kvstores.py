@@ -300,3 +300,30 @@ class LevelDBStore(KVStore):
     def get_adjacency(self, node_id: str) -> Optional[bytes]:
         key = f"A:{node_id}".encode('utf-8')
         return self.db.get(key)
+
+    
+    # -------------------------------------------------------------------------
+    # Bulk Write: Adjacency
+    # -------------------------------------------------------------------------
+    def put_adjacency_bulk(self, adj_dict: Dict[str, bytes]) -> None:
+        """
+        Insert/update multiple adjacency lists in one write batch.
+        :param adj_dict: a dict mapping node_id -> serialized adjacency
+        """
+        with self.db.write_batch() as wb:
+            for node_id, val in adj_dict.items():
+                key = f"A:{node_id}".encode('utf-8')
+                wb.put(key, val)
+
+    # -------------------------------------------------------------------------
+    # Bulk Read: Adjacency
+    # -------------------------------------------------------------------------
+    def get_adjacency_bulk(self, node_ids: List[str]) -> Dict[str, bytes]:
+        results = {}
+        for node_id in node_ids:
+            key = f"A:{node_id}".encode('utf-8')
+            data = self.db.get(key)
+            if data is not None:
+                results[node_id] = data
+        return results
+

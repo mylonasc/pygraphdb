@@ -84,6 +84,7 @@ class GraphDB:
         value = self.serializer.serialize(node_dict)
         self.store.put_node(node.get_id, value)
 
+
     def get_node(self, node_id) -> Node:
         data = self.store.get_node(node_id)
         if data:
@@ -98,10 +99,23 @@ class GraphDB:
     # -----------
     # Edge Methods
     # -----------
-    def put_edge(self, edge: Edge):
+    def put_edge(self, edge: Edge, update_adjacency = True):
         edge_dict = edge.to_dict()
         value = self.serializer.serialize(edge_dict)
         self.store.put_edge(edge.get_id, value)
+        if update_adjacency:
+            # Get the edge lists from the adjacency store, 
+            # and if they exist update them, if they don't exist 
+            # create them.
+            for dict_flag, io_node in zip(['source','target'], (edge.source, edge.target)): 
+                adj_list = self.store.get_adjacency(io_node)
+                new_edge_list = {dict_flag : [edge.get_id]}
+                if adj_list is None:
+                    self.store.put_adjacency(io_node, self.serializer.serialize(new_edge_list))
+                else:
+                    adj_edge_list = self.serializer.deserialize(adj_list)
+                    adj_edge_list.setdefault(dict_flag, []).append(edge.get_id)
+                    self.store.put_adjacency(io_node, self.serializer.serialize(adj_edge_list))
 
     def get_edge(self, edge_id) -> Edge:
         data = self.store.get_edge(edge_id)
@@ -187,30 +201,49 @@ class GraphDB:
             else:
                 results.append(None)  # or skip it
         return results
-    
+
     # -----------------------
     # Adjacency Management
     # -----------------------
-    def _append_edge_to_adjacency(self, node_id: str, edge_id: str):
-        """
-        Internal helper: read the adjacency list for node_id,
-        append edge_id if not present, and write it back.
-        """
-        edges_list = self.get_adjacency_list(node_id)
-        if edge_id not in edges_list:
-            edges_list.append(edge_id)
-            self.put_adjacency_list(node_id, edges_list)
+    
+    # def _append_edge_to_adjacency(self, node_id: str, edge_id: str):
+    #     """
+    #     Internal helper: read the adjacency list for node_id,
+    #     append edge_id if not present, and write it back.
+    #     """
+    #     edges_list = self.get_adjacency_list(node_id)
+    #     if edge_id not in edges_list:
+    #         edges_list.append(edge_id)
+    #         self.put_adjacency_list(node_id, edges_list)
 
-    def get_adjacency_list(self, node_id: str) -> list[str]:
+    def get_adjacency_list(self, node_id: str,direction = 'forward', return_raw = False) -> list[str]:
         """
         Returns the list of edge IDs connected to node_id.
         If none found, returns an empty list.
+        
+        Args:
+          node_id: a string representing the node_id
+          direction : 'forward', 'backward' or 'any' -> controls whether the source, target, or un-directed adjacency of the node will be returned. 
+          return_raw : if this flag is true it will return the data as they are stored (e.g., a dictionary of 'source' and 'target' lists. )
         """
+        
         raw = self.store.get_adjacency(node_id)
         if raw is None:
             return []
-        return self.serializer.deserialize(raw)  # Expecting a list[str]
+        adj = self.serializer.deserialize(raw)
+        
+        if return_raw:
+            return adj
 
+        if direction == 'forward':
+            return adj.get('target',[]) 
+        if direction == 'backward':
+            return adj.get('source',[])
+        if direction == 'any' : 
+            _s = adj.get('source',[])
+            _t = adj.get('target',[])
+            return list(set(_s).union(set(_t)))
+        
     def put_adjacency_list(self, node_id: str, edges_list: list[str]):
         """Stores the adjacency list for node_id."""
         raw = self.serializer.serialize(edges_list)
@@ -240,15 +273,20 @@ class GraphDB:
         self.store.delete_edge(edge_id)
 
     def _remove_edge_from_adjacency(self, node_id: str, edge_id: str):
-        adj_list = self.get_adjacency_list(node_id)
-        if edge_id in adj_list:
-            adj_list.remove(edge_id)
+        adj_list = self.get_adjacency_list(node_id,return_raw = True)
+        _changed = False
+        for _dir in ['source', 'target']:
+            if _dir in adj_list:
+                if edge_id in adj_list[_dir]:
+                    adj_list[_dir].remove(edge_id)
+                    _changed = True
+        if _changed:
             self.put_adjacency_list(node_id, adj_list)
 
     # -----------------------
     # BFS Example
     # -----------------------
-    def bfs(self, start_node_id: str) -> list[str]:
+    def bfs(self, start_node_id: str, direction = 'any') -> list[str]:
         """
         Returns a list of node_ids in BFS order starting from `start_node_id`.
         Demonstrates how adjacency is used for graph traversal.
@@ -256,7 +294,6 @@ class GraphDB:
         visited = set()
         queue = [start_node_id]
         result = []
-
         while queue:
             current = queue.pop(0)
             if current in visited:
@@ -265,7 +302,8 @@ class GraphDB:
             result.append(current)
 
             # 1) get adjacency list for current
-            edges_list = self.get_adjacency_list(current)
+            edges_list = self.get_adjacency_list(current, direction = direction)
+            
             # 2) for each edge in adjacency, find the other node
             for e_id in edges_list:
                 edge_obj = self.get_edge(e_id)
@@ -283,19 +321,20 @@ class GraphDB:
         # 1) Build a dict[edge_id, bytes] to store all edges in one go
         edge_dict = {}
         # 2) Accumulate adjacency changes in memory: node_id -> set(edge_ids)
-        adjacency_accumulator = {}
-
+        adjacency_accumulator = {} # the keys are "nodes" and the values are sets of edges for where the nodes appear as source or destinations (separately). 
+        # adjacency_accumulator_target = {}
         for e in edges:
             e_bytes = self.serializer.serialize(e.to_dict())
-            edge_dict[e.get_id] = e_bytes
+            edge_dict[e.get_id] = e_bytes            
+            # adjacency accum update
+            adjacency_accumulator.setdefault(e.source, {'target' : [], 'source' : []})
+            adjacency_accumulator[e.source]['source'].append(e.get_id)
+            adjacency_accumulator.setdefault(e.target, {'target' : [], 'source' : []})
+            adjacency_accumulator[e.target]['target'].append(e.get_id)
             
-            # adjacency
-            adjacency_accumulator.setdefault(e.source, set()).add(e.get_id)
-            if e.source != e.target:
-                adjacency_accumulator.setdefault(e.target, set()).add(e.get_id)
-
         # 3) Use the store's put_edges_bulk
         self.store.put_edges_bulk(edge_dict)
+
 
         # 4) Build adjacency dict so we do one read+write per node
         #    node_id -> final adjacency (existing + new edges)
@@ -303,14 +342,27 @@ class GraphDB:
 
         # For each node in adjacency_accumulator, fetch old adjacency,
         # union with new edges, and store in final_adjacency dict
-        for node_id, new_edges in adjacency_accumulator.items():
+        for node_id, new_edges_source_target in adjacency_accumulator.items():
+            
             raw_adj = self.store.get_adjacency(node_id)
             if raw_adj is None:
-                old_edges = set()
+                old_edges = {'source' : set(),'target' : set()}
             else:
-                old_edges = set(self.serializer.deserialize(raw_adj))
-            updated = old_edges.union(new_edges)
-            final_adjacency[node_id] = self.serializer.serialize(list(updated))
+                old_edges = self.serializer.deserialize(raw_adj)
+                if 'target' not in old_edges:
+                    old_edges['target'] = set()
+                
+                if 'source' not in old_edges:
+                    old_edges['source'] = set()
+            source_edges = old_edges['source']
+            target_edges = old_edges['target']
+            if 'source' in new_edges_source_target:
+                source_edges = source_edges.union(new_edges_source_target['source'])
+            if 'target' in new_edges_source_target:
+                target_edges = target_edges.union(new_edges_source_target['target'])
+            # Here we cast to list because some objects do not support set serialization. 
+            new_adj_value = {'source' : list(source_edges),'target' : list(target_edges)}
+            final_adjacency[node_id] = self.serializer.serialize(new_adj_value)
 
         # 5) One batch write for adjacency
         self.store.put_adjacency_bulk(final_adjacency)
