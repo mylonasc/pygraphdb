@@ -4,6 +4,13 @@ from typing import Optional, Dict, List
 import os
 
 
+def _pack_long_int(int_val):
+    return struct.pack('<L', int_val)
+
+def _unpack_long_int(int_val):
+    return struct.unpack('<L', int_val)[0]
+
+
 class KVStore:
     """Abstract interface for a simple key-value store."""
 
@@ -68,9 +75,48 @@ class KVStore:
 # =========================================
 # LMDB Implementation
 # =========================================
+import struct
+class SimpleKV:
+    def __init__(self, db_path):
+        self.db_path = db_path
+        self.max_key_idx = None
+        
+    def get_num_keys(self):
+        _b = self.get('num_keys'.encode('utf-8'))
+        num_keys = struct.unpack('<L',_b)
+        return num_keys
+    
+    def put_num_keys(self, num_keys):
+        num_keys_bytes = struct.pack('<L',num_keys)
+        _b = self.put('num_keys'.encode('utf-8'), num_keys_bytes)
+
+    def put(self, key : bytes, value : bytes):
+        with self.env.begin(write=True, db=self.db_path) as txn:
+            txn.put(key, value)
+
+    def get(self, key):
+        with self.env.begin(write=False, db=self.db_path) as txn:
+            return txn.get(key)
+    
+    def encode_db_key(self, key):
+        """If the key exists, it will return the existing key.
+        if the key does not exist, it will add it to the KV store with a new increment, 
+        and return that.
+        """
+        v = self.get(key.encode('utf-8'))
+        if v is None:
+            num_keys = self.get_num_keys()
+            num_keys += 1
+            k_idx = num_keys
+            self.put_num_keys(num_keys)
+            return num_keys
+    def decode_db_key(self, key):
+        v = self.get(key.encode('utf-8'))
+        
+
 
 class LMDBStore(KVStore):
-    def __init__(self, path='graph_lmdb', map_size=10_485_760):
+    def __init__(self, path='graph_lmdb', map_size=10_485_760, map_id = True, map_keys = True):
         """
         Creates/opens an LMDB environment with three named sub-databases:
           - b'nodes' for node data
@@ -80,12 +126,15 @@ class LMDBStore(KVStore):
         self.env = lmdb.open(path, map_size=map_size, subdir=True, max_dbs=3)
         self.nodes_db = self.env.open_db(b'nodes')
         self.edges_db = self.env.open_db(b'edges')
-        self.adj_db   = self.env.open_db(b'adj')
-        # """Initialize an LMDB environment.\n        `map_size` is the maximum size the database can grow to."""
-        # self.env = lmdb.open(path, map_size=map_size, subdir=True, max_dbs=2)
-        # # Create separate sub-databases for nodes and edges
-        # self.nodes_db = self.env.open_db(b'nodes')
-        # self.edges_db = self.env.open_db(b'edges')
+        self.adj_db   = self.env.open_db(b'adj')        
+
+        if map_keys:
+            self.node_key_encdec_db = self.env.open_db(b'node_key_db')
+            self.edge_key_encdec_db = self.env.open_db(b'edge_key_db')
+            self.node_key_encdec = SimpleKV(b'node_key_db')
+            self.node_key_encdec = SimpleKV(b'edge_key_db')
+            
+
 
     # -- Basic methods (not used by GraphDB if we rely on specialized node/edge methods below)
     def put(self, key: bytes, value: bytes):
@@ -327,3 +376,55 @@ class LevelDBStore(KVStore):
                 results[node_id] = data
         return results
 
+
+class SimpleIndexCounterKVStore:
+    """This is to help with lowering storage requirements 
+    for edge and node keys, by casting them to long ints. 
+
+    It makes use of the struct.pack and struct.unpack functions 
+    and a simple counter (also stored in the medatadata) to count the number of  
+    keys (and hence the index) already entered. 
+    """
+    def __init__(self, dbenv = env, db_path = b'nodes'):
+        self.db_path = db_path
+        self.env = dbenv
+        self.kvdb = self.env.open_db(self.db_path)        
+        self.max_key_idx = None
+        
+    def get_num_keys(self):
+        _b = self.get('num_keys'.encode('utf-8'))
+        if _b is None:
+            return 0
+        num_keys = struct.unpack('<L',_b)[0]
+        return num_keys
+    
+    def put_num_keys(self, num_keys):
+        num_keys_bytes = struct.pack('<L',num_keys)
+        _b = self.put('num_keys'.encode('utf-8'), num_keys_bytes)
+
+    def put(self, key : bytes, value : bytes):
+        with self.env.begin(write=True, db=self.kvdb) as txn:
+            txn.put(key, value)
+
+    def get(self, key):
+        with self.env.begin(write=False, db=self.kvdb) as txn:
+            vv = txn.get(key)
+            return vv
+    
+    def encode_db_key(self, key):
+        """If the key exists, it will return the existing key.
+        if the key does not exist, it will add it to the KV store with a new increment, 
+        and return that.
+        """
+        _enc_key = key.encode('utf-8')
+        v = self.get(_enc_key)
+        if v is None:
+            num_keys = self.get_num_keys()
+            num_keys += 1
+            k_idx = num_keys
+            self.put_num_keys(num_keys)
+            self.put(_enc_key, _pack_long_int(num_keys))
+            return num_keys
+        return _unpack_long_int(v)
+    def decode_db_key(self, key):
+        v = self.get(key.encode('utf-8'))

@@ -101,8 +101,7 @@ class GraphDB:
     def __init__(
             self, 
             store: KVStore, 
-            serializer: Serializer, 
-            graph_entity_serializer : Optional[GraphEntityDictSerializer] = None
+            serializer: Serializer
         ):
         """
         :param store: An instance of KVStore (e.g. LMDBStore or LevelDBStore),
