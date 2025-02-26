@@ -3,7 +3,7 @@ import pickle
 import json
 import os
 import uuid
-from typing import List
+from typing import List, Optional, Union
 from kvstores import KVStore
 from serializers import Serializer
 
@@ -33,7 +33,6 @@ class Node:
     def from_dict(cls, data: dict):
         """Factory from dictionary."""
         return cls(node_id=data['id'], properties=data['properties'])
-
 
 class Edge:
     def __init__(self, edge_id=None, source=None, target=None, properties=None):
@@ -65,9 +64,46 @@ class Edge:
                    target=data['target'],
                    properties=data['properties'])
 
+
+class GraphEntityDictSerializer:
+    _ent_type_encoder = {
+        'Edge' : lambda x : x.to_dict(),
+        'Node' : lambda x : x.to_dict(),
+        'AdjacencyList' : lambda x : x
+    }
+
+    _ent_type_decoder = {
+        'Edge' : lambda x : Edge.from_dict(x),
+        'Node' : lambda x : Node.from_dict(x),
+        'AdjacencyList' : lambda x : x
+    }
+    
+    def __init__(self, serializer : Serializer):
+        self.serializer = serializer
+    
+    def serialize(self, entity, entity_type : str):
+        enc_obj = self._ent_type_encoder[entity_type](entity)
+        return self.serializer.serialize(enc_obj)
+    
+    def deserialize(self, val, entity_type : str):
+        """ Deserializer (conditional on entity type)
+
+        Args:
+            val: bytes containing the data
+            entity_type : (str) is Edge, Node, AdjacencyList
+        """
+        deser_val = self.serializer.deserialize(val)
+        return self._ent_type_decoder[entity_type](deser_val)
+
+
 class GraphDB:
     """High-level interface to manage Node/Edge storing, retrieval, and indexing."""
-    def __init__(self, store: KVStore, serializer: Serializer):
+    def __init__(
+            self, 
+            store: KVStore, 
+            serializer: Serializer, 
+            graph_entity_serializer : Optional[GraphEntityDictSerializer] = None
+        ):
         """
         :param store: An instance of KVStore (e.g. LMDBStore or LevelDBStore),
                       which implements specialized node/edge methods
@@ -75,21 +111,23 @@ class GraphDB:
         """
         self.store = store
         self.serializer = serializer
+        self.entity_serializer = GraphEntityDictSerializer(
+            self.serializer
+        )
 
     # -----------
     # Node Methods
     # -----------
     def put_node(self, node: Node):
-        node_dict = node.to_dict()
-        value = self.serializer.serialize(node_dict)
+        value = self.entity_serializer.serialize(node, 'Node')
         self.store.put_node(node.get_id, value)
-
 
     def get_node(self, node_id) -> Node:
         data = self.store.get_node(node_id)
         if data:
-            node_dict = self.serializer.deserialize(data)
-            return Node.from_dict(node_dict)
+            # node_dict = self.serializer.deserialize(data)
+            # return Node.from_dict(node_dict)
+            return self.entity_serializer.deserialize(data,'Node')
         else:
             return None
 
@@ -100,8 +138,8 @@ class GraphDB:
     # Edge Methods
     # -----------
     def put_edge(self, edge: Edge, update_adjacency = True):
-        edge_dict = edge.to_dict()
-        value = self.serializer.serialize(edge_dict)
+        # edge_dict = edge.to_dict()
+        value = self.entity_serializer.serialize(edge,'Edge')
         self.store.put_edge(edge.get_id, value)
         if update_adjacency:
             # Get the edge lists from the adjacency store, 
@@ -111,17 +149,17 @@ class GraphDB:
                 adj_list = self.store.get_adjacency(io_node)
                 new_edge_list = {dict_flag : [edge.get_id]}
                 if adj_list is None:
-                    self.store.put_adjacency(io_node, self.serializer.serialize(new_edge_list))
+                    serialized_adj_list = self.entity_serializer.serialize(new_edge_list,'AdjacencyList')
+                    self.store.put_adjacency(io_node, serialized_adj_list)
                 else:
-                    adj_edge_list = self.serializer.deserialize(adj_list)
+                    adj_edge_list = self.entity_serializer.deserialize(adj_list,'AdjacencyList')
                     adj_edge_list.setdefault(dict_flag, []).append(edge.get_id)
                     self.store.put_adjacency(io_node, self.serializer.serialize(adj_edge_list))
 
     def get_edge(self, edge_id) -> Edge:
         data = self.store.get_edge(edge_id)
         if data:
-            edge_dict = self.serializer.deserialize(data)
-            return Edge.from_dict(edge_dict)
+            return self.entity_serializer.deserialize(data,'Edge')
         else:
             return None
 
@@ -183,7 +221,7 @@ class GraphDB:
         """
         to_store = {}
         for n in nodes:
-            to_store[n.get_id] = self.serializer.serialize(n.to_dict())
+            to_store[n.get_id] = self.entity_serializer.serialize(n, 'Node')
         self.store.put_nodes_bulk(to_store)
 
     def get_nodes(self, node_ids: list[str]) -> list[Node]:
@@ -324,7 +362,7 @@ class GraphDB:
         adjacency_accumulator = {} # the keys are "nodes" and the values are sets of edges for where the nodes appear as source or destinations (separately). 
         # adjacency_accumulator_target = {}
         for e in edges:
-            e_bytes = self.serializer.serialize(e.to_dict())
+            e_bytes = self.entity_serializer.serialize(e, 'Edge')
             edge_dict[e.get_id] = e_bytes            
             # adjacency accum update
             adjacency_accumulator.setdefault(e.source, {'target' : [], 'source' : []})
@@ -362,7 +400,7 @@ class GraphDB:
                 target_edges = target_edges.union(new_edges_source_target['target'])
             # Here we cast to list because some objects do not support set serialization. 
             new_adj_value = {'source' : list(source_edges),'target' : list(target_edges)}
-            final_adjacency[node_id] = self.serializer.serialize(new_adj_value)
+            final_adjacency[node_id] = self.entity_serializer.serialize(new_adj_value,'AdjacencyList')
 
         # 5) One batch write for adjacency
         self.store.put_adjacency_bulk(final_adjacency)
