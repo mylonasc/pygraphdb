@@ -385,7 +385,7 @@ class SimpleIndexCounterKVStore:
     and a simple counter (also stored in the medatadata) to count the number of  
     keys (and hence the index) already entered. 
     """
-    def __init__(self, dbenv = env, db_path = b'nodes'):
+    def __init__(self, dbenv = None, db_path = b'nodes'):
         self.db_path = db_path
         self.env = dbenv
         self.kvdb = self.env.open_db(self.db_path)        
