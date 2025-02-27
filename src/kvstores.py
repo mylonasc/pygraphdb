@@ -116,14 +116,17 @@ class SimpleKV:
 
 
 class LMDBStore(KVStore):
-    def __init__(self, path='graph_lmdb', map_size=10_485_760, map_id = True, map_keys = True):
+    def __init__(self, path='graph_lmdb', map_size=10_485_760, map_id = True, map_keys = False):
         """
         Creates/opens an LMDB environment with three named sub-databases:
           - b'nodes' for node data
           - b'edges' for edge data
           - b'adj'   for adjacency lists
         """
-        self.env = lmdb.open(path, map_size=map_size, subdir=True, max_dbs=3)
+        max_dbs = 3
+        if map_keys:
+            map_dbs += 2
+        self.env = lmdb.open(path, map_size=map_size, subdir=True, max_dbs=max_dbs)
         self.nodes_db = self.env.open_db(b'nodes')
         self.edges_db = self.env.open_db(b'edges')
         self.adj_db   = self.env.open_db(b'adj')        
