@@ -110,6 +110,7 @@ class SimpleKV:
             k_idx = num_keys
             self.put_num_keys(num_keys)
             return num_keys
+        
     def decode_db_key(self, key):
         v = self.get(key.encode('utf-8'))
         
@@ -136,8 +137,6 @@ class LMDBStore(KVStore):
             self.edge_key_encdec_db = self.env.open_db(b'edge_key_db')
             self.node_key_encdec = SimpleKV(b'node_key_db')
             self.node_key_encdec = SimpleKV(b'edge_key_db')
-            
-
 
     # -- Basic methods (not used by GraphDB if we rely on specialized node/edge methods below)
     def put(self, key: bytes, value: bytes):
@@ -167,74 +166,90 @@ class LMDBStore(KVStore):
         self.env.close()
 
     # -- Specialized node methods
-    def put_node(self, node_id: str, value: bytes):
+    def put_node(self, node_id: bytes, value: bytes):
         with self.env.begin(write=True, db=self.nodes_db) as txn:
-            txn.put(node_id.encode('utf-8'), value)
+            txn.put(node_id, value)
 
-    def get_node(self, node_id: str) -> bytes:
+    def get_node(self, node_id: bytes) -> bytes:
         with self.env.begin(write=False, db=self.nodes_db) as txn:
-            return txn.get(node_id.encode('utf-8'))
+            return txn.get(node_id)
 
-    def delete_node(self, node_id: str):
+    def delete_node(self, node_id: bytes):
         with self.env.begin(write=True, db=self.nodes_db) as txn:
-            txn.delete(node_id.encode('utf-8'))
+            txn.delete(node_id)
 
     # -- Specialized edge methods
-    def put_edge(self, edge_id: str, value: bytes):
+    def put_edge(self, edge_id: bytes, value: bytes):
         with self.env.begin(write=True, db=self.edges_db) as txn:
-            txn.put(edge_id.encode('utf-8'), value)
+            txn.put(edge_id, value)
 
     def get_edge(self, edge_id: str) -> bytes:
         with self.env.begin(write=False, db=self.edges_db) as txn:
-            return txn.get(edge_id.encode('utf-8'))
+            return txn.get(edge_id)
 
     def delete_edge(self, edge_id: str):
         with self.env.begin(write=True, db=self.edges_db) as txn:
-            txn.delete(edge_id.encode('utf-8'))
+            txn.delete(edge_id)
 
-    def put_nodes_bulk(self, keys_and_values: dict[str, bytes]):
+    def put_nodes_bulk(self, keys_and_values: dict[bytes, bytes]):
         """Write a batch of nodes in a single transaction."""
         with self.env.begin(write=True, db=self.nodes_db) as txn:
             for node_id, val in keys_and_values.items():
-                txn.put(node_id.encode('utf-8'), val)
+                txn.put(node_id, val)
     
-    def get_nodes_bulk(self, node_ids: list[str]) -> dict[str, bytes]:
+    def get_nodes_bulk(self, node_ids: list[bytes]) -> dict[bytes, bytes]:
         """Retrieve multiple nodes in one read transaction."""
         results = {}
         with self.env.begin(write=False, db=self.nodes_db) as txn:
             for node_id in node_ids:
-                data = txn.get(node_id.encode('utf-8'))
+                data = txn.get(node_id)
                 if data is not None:
                     results[node_id] = data
         return results
     
-    def put_edges_bulk(self, keys_and_values: dict[str, bytes]):
+    def put_edges_bulk(self, keys_and_values: dict[bytes, bytes]):
         with self.env.begin(write=True, db=self.edges_db) as txn:
             for edge_id, val in keys_and_values.items():
-                txn.put(edge_id.encode('utf-8'), val)
+                txn.put(edge_id, val)
     
-    def get_edges_bulk(self, edge_ids: list[str]) -> dict[str, bytes]:
+    def get_edges_bulk(self, edge_ids: list[bytes]) -> dict[bytes, bytes]:
         results = {}
         with self.env.begin(write=False, db=self.edges_db) as txn:
             for edge_id in edge_ids:
-                data = txn.get(edge_id.encode('utf-8'))
+                data = txn.get(edge_id)
                 if data is not None:
                     results[edge_id] = data
         return results
     
-    # ----- Adjacency Methods -----
-    def put_adjacency(self, node_id: str, value: bytes) -> None:
-        with self.env.begin(write=True, db=self.adj_db) as txn:
-            txn.put(node_id.encode('utf-8'), value)
+    def get_node_keys_generator(self, num_nodes = None, key_offset = None):
+        yielded = 0
+        with self.env.begin(write = False, db = self.nodes_db) as txn:
+            with txn.cursor() as c:
+                if key_offset is not None:
+                    c.set_range(key_offset)
+                for k, _ in c:
+                    yield k
+                    yielded += 1
+                    if num_nodes is not None and yielded == num_nodes:
+                        break
 
-    def get_adjacency(self, node_id: str) -> Optional[bytes]:
+    # ----- Adjacency Methods -----
+    def put_adjacency(self, node_id: bytes, value: bytes) -> None:
+        with self.env.begin(write=True, db=self.adj_db) as txn:
+            txn.put(node_id, value)
+
+    def get_adjacency(self, node_id: bytes) -> Optional[bytes]:
         with self.env.begin(write=False, db=self.adj_db) as txn:
-            return txn.get(node_id.encode('utf-8'))
+            # if not isinstance(node_id,bytes):
+            #     print("\n:-----")
+            #     print(node_id)
+            #     print(":-----")
+            return txn.get(node_id)
 
     # -------------------------------------------------------------------------
     # Bulk Write: Adjacency
     # -------------------------------------------------------------------------
-    def put_adjacency_bulk(self, adj_dict: Dict[str, bytes]) -> None:
+    def put_adjacency_bulk(self, adj_dict: Dict[bytes, bytes]) -> None:
         """
         Insert/update multiple adjacency lists in one transaction.
         :param adj_dict: a dict mapping node_id -> serialized adjacency (list of edges)
@@ -246,7 +261,7 @@ class LMDBStore(KVStore):
     # -------------------------------------------------------------------------
     # Bulk Read: Adjacency
     # -------------------------------------------------------------------------
-    def get_adjacency_bulk(self, node_ids: List[str]) -> Dict[str, bytes]:
+    def get_adjacency_bulk(self, node_ids: List[bytes]) -> Dict[bytes, bytes]:
         """
         Retrieve multiple adjacency lists in a single read transaction.
         Returns a dict { node_id: serialized adjacency } for all found items.
@@ -254,7 +269,7 @@ class LMDBStore(KVStore):
         results = {}
         with self.env.begin(write=False, db=self.adj_db) as txn:
             for node_id in node_ids:
-                data = txn.get(node_id.encode('utf-8'))
+                data = txn.get(node_id)
                 if data is not None:
                     results[node_id] = data
         return results
@@ -289,41 +304,49 @@ class LevelDBStore(KVStore):
         self.db.close()
 
     # -- Specialized methods for nodes
-    def put_node(self, node_id: str, value: bytes):
-        key = f"N:{node_id}".encode('utf-8')
+    def put_node(self, node_id: bytes, value: bytes):
+        s = node_id.decode()
+        key = f"N:{s}".encode('utf-8')
         self.db.put(key, value)
 
-    def get_node(self, node_id: str) -> bytes:
-        key = f"N:{node_id}".encode('utf-8')
+    def get_node(self, node_id: bytes) -> bytes:
+        s = node_id.decode()
+        key = f"N:{s}".encode('utf-8')
         return self.db.get(key)
 
     def delete_node(self, node_id: str):
-        key = f"N:{node_id}".encode('utf-8')
+        s = node_id.decode()
+        key = f"N:{s}".encode('utf-8')
         self.db.delete(key)
 
     # -- Specialized methods for edges
     def put_edge(self, edge_id: str, value: bytes):
-        key = f"E:{edge_id}".encode('utf-8')
+        s = edge_id.decode()
+        key = f"E:{s}".encode('utf-8')
         self.db.put(key, value)
 
     def get_edge(self, edge_id: str) -> bytes:
-        key = f"E:{edge_id}".encode('utf-8')
+        s = edge_id.decode()
+        key = f"E:{s}".encode('utf-8')
         return self.db.get(key)
 
     def delete_edge(self, edge_id: str):
-        key = f"E:{edge_id}".encode('utf-8')
+        s = edge_id.decode()
+        key = f"E:{s}".encode('utf-8')
         self.db.delete(key)
 
     def put_nodes_bulk(self, keys_and_values: dict[str, bytes]):
         """Use a WriteBatch for atomic bulk updates."""
         with self.db.write_batch() as wb:
             for node_id, val in keys_and_values.items():
-                wb.put(f"N:{node_id}".encode('utf-8'), val)
+                s = node_id.decode()
+                wb.put(f"N:{s}".encode('utf-8'), val)
     
     def get_nodes_bulk(self, node_ids: list[str]) -> dict[str, bytes]:
         results = {}
         for node_id in node_ids:
-            key = f"N:{node_id}".encode('utf-8')
+            s = node_id.decode()
+            key = f"N:{s}".encode('utf-8')
             data = self.db.get(key)
             if data is not None:
                 results[node_id] = data
@@ -332,12 +355,14 @@ class LevelDBStore(KVStore):
     def put_edges_bulk(self, keys_and_values: dict[str, bytes]):
         with self.db.write_batch() as wb:
             for edge_id, val in keys_and_values.items():
-                wb.put(f"E:{edge_id}".encode('utf-8'), val)
+                s = edge_id.decode()
+                wb.put(f"E:{s}".encode('utf-8'), val)
     
     def get_edges_bulk(self, edge_ids: list[str]) -> dict[str, bytes]:
         results = {}
         for edge_id in edge_ids:
-            key = f"E:{edge_id}".encode('utf-8')
+            s = edge_id.decode()
+            key = f"E:{s}".encode('utf-8')
             data = self.db.get(key)
             if data is not None:
                 results[edge_id] = data
@@ -346,11 +371,13 @@ class LevelDBStore(KVStore):
 
     # ----- Adjacency Methods -----
     def put_adjacency(self, node_id: str, value: bytes) -> None:
-        key = f"A:{node_id}".encode('utf-8')
+        s = node_id.decode()
+        key = f"A:{s}".encode('utf-8')
         self.db.put(key, value)
 
-    def get_adjacency(self, node_id: str) -> Optional[bytes]:
-        key = f"A:{node_id}".encode('utf-8')
+    def get_adjacency(self, node_id: bytes) -> Optional[bytes]:
+        s = node_id.decode()
+        key = f"A:{s}".encode('utf-8')
         return self.db.get(key)
 
     
@@ -364,7 +391,9 @@ class LevelDBStore(KVStore):
         """
         with self.db.write_batch() as wb:
             for node_id, val in adj_dict.items():
-                key = f"A:{node_id}".encode('utf-8')
+                # s = node_id.decode()
+                s = node_id
+                key = f"A:{s}".encode('utf-8')
                 wb.put(key, val)
 
     # -------------------------------------------------------------------------
@@ -373,7 +402,8 @@ class LevelDBStore(KVStore):
     def get_adjacency_bulk(self, node_ids: List[str]) -> Dict[str, bytes]:
         results = {}
         for node_id in node_ids:
-            key = f"A:{node_id}".encode('utf-8')
+            s = node_id.decode()
+            key = f"A:{s}".encode('utf-8')
             data = self.db.get(key)
             if data is not None:
                 results[node_id] = data

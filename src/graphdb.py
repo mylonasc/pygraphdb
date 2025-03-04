@@ -7,6 +7,27 @@ from typing import List, Optional, Union
 from kvstores import KVStore
 from serializers import Serializer
 
+import datetime
+import struct
+
+def datetime_to_bytes(dt: datetime.datetime, tzinfo = datetime.timezone.utc) -> bytes:
+    """Convert a datetime >= 1970-01-01 to big-endian 64-bit microseconds since epoch."""
+    # Make sure `dt` is in UTC, or at least consistently handled.
+    # (If dt has no tzinfo, Python treats it as local time for .timestamp().)
+    epoch = datetime.datetime(1970, 1, 1, tzinfo=tzinfo)
+    delta = dt - epoch
+    # Convert to integer microseconds
+    microseconds = int(delta.total_seconds() * 1_000_000)
+    # Pack as an unsigned 64-bit integer in big-endian order
+    return struct.pack('>Q', microseconds)
+
+def bytes_to_datetime(b: bytes, tzinfo = datetime.timezone.utc) -> datetime.datetime:
+    """Inverse of datetime_to_bytes for datetimes >= 1970-01-01."""
+    epoch = datetime.datetime(1970, 1, 1, tzinfo=tzinfo)
+    (microseconds,) = struct.unpack('>Q', b)
+    return epoch + datetime.timedelta(microseconds=microseconds)
+
+
 # =========================================
 #  Node and Edge Models
 # =========================================
@@ -21,6 +42,10 @@ class Node:
     def get_id(self):
         """Unique identifier for this node."""
         return self._id
+    
+    @property
+    def get_id_bytes(self):
+        return self._id.encode('utf-8')
     
     def to_dict(self):
         """Convert to a dictionary form for serialization."""
@@ -47,6 +72,10 @@ class Edge:
         """Unique identifier for this edge."""
         return self._id
     
+    @property
+    def get_id_bytes(self):
+        return self._id.encode('utf-8')
+
     def to_dict(self):
         """Convert to a dictionary for serialization."""
         return {
@@ -64,6 +93,37 @@ class Edge:
                    target=data['target'],
                    properties=data['properties'])
 
+class TimeIndexedEdge(Edge):
+    def __init__(self, timestamp_dat, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.timestamp_dat = timestamp_dat
+        self.id_string = self.get_id
+
+    @property
+    def get_id_bytes(self):
+        b2 = self.id_string.encode('utf-8')
+        sep = b':'
+        b1 = datetime_to_bytes(self.timestamp_dat)
+        return b1 + sep + b2
+
+    def to_dict(self):
+        """Convert to a dictionary for serialization."""
+        return {
+            'timestamp_dat' : self.timestamp_dat,
+            'id': self._id,
+            'source': self.source if isinstance(self.source, str) else self.source.get_id,
+            'target': self.target if isinstance(self.target, str) else self.target.get_id,
+            'properties': self.properties
+        }
+    
+    @classmethod
+    def from_dict(cls, data: dict):
+        """Factory from dictionary."""
+        return cls(timestamp_dat = data['timestamp_dat'],
+                   edge_id=data['id'],
+                   source=data['source'],
+                   target=data['target'],
+                   properties=data['properties'])
 
 class GraphEntityDictSerializer:
     _ent_type_encoder = {
@@ -119,7 +179,7 @@ class GraphDB:
     # -----------
     def put_node(self, node: Node):
         value = self.entity_serializer.serialize(node, 'Node')
-        self.store.put_node(node.get_id, value)
+        self.store.put_node(node.get_id_bytes, value)
 
     def get_node(self, node_id) -> Node:
         data = self.store.get_node(node_id)
@@ -136,24 +196,25 @@ class GraphDB:
     # -----------
     # Edge Methods
     # -----------
-    def put_edge(self, edge: Edge, update_adjacency = True):
+    def put_edge(self, edge: Edge, update_adjacency = True, node_key_to_bytes = lambda x : x.encode('utf-8')):
         # edge_dict = edge.to_dict()
         value = self.entity_serializer.serialize(edge,'Edge')
-        self.store.put_edge(edge.get_id, value)
+        self.store.put_edge(edge.get_id_bytes, value)
         if update_adjacency:
             # Get the edge lists from the adjacency store, 
             # and if they exist update them, if they don't exist 
             # create them.
             for dict_flag, io_node in zip(['source','target'], (edge.source, edge.target)): 
-                adj_list = self.store.get_adjacency(io_node)
+                io_node_key = node_key_to_bytes(io_node)
+                adj_list = self.store.get_adjacency(io_node_key)
                 new_edge_list = {dict_flag : [edge.get_id]}
                 if adj_list is None:
                     serialized_adj_list = self.entity_serializer.serialize(new_edge_list,'AdjacencyList')
-                    self.store.put_adjacency(io_node, serialized_adj_list)
+                    self.store.put_adjacency(io_node_key, serialized_adj_list)
                 else:
                     adj_edge_list = self.entity_serializer.deserialize(adj_list,'AdjacencyList')
                     adj_edge_list.setdefault(dict_flag, []).append(edge.get_id)
-                    self.store.put_adjacency(io_node, self.serializer.serialize(adj_edge_list))
+                    self.store.put_adjacency(io_node_key, self.serializer.serialize(adj_edge_list))
 
     def get_edge(self, edge_id) -> Edge:
         data = self.store.get_edge(edge_id)
@@ -220,7 +281,7 @@ class GraphDB:
         """
         to_store = {}
         for n in nodes:
-            to_store[n.get_id] = self.entity_serializer.serialize(n, 'Node')
+            to_store[n.get_id_bytes] = self.entity_serializer.serialize(n, 'Node')
         self.store.put_nodes_bulk(to_store)
 
     def get_nodes(self, node_ids: list[str]) -> list[Node]:
@@ -238,6 +299,8 @@ class GraphDB:
             else:
                 results.append(None)  # or skip it
         return results
+    def get_node_keys_generator(self, num_nodes = None, key_offset = None):
+        return self.store.get_node_keys_generator(num_nodes, key_offset)
 
     # -----------------------
     # Adjacency Management
@@ -253,7 +316,7 @@ class GraphDB:
     #         edges_list.append(edge_id)
     #         self.put_adjacency_list(node_id, edges_list)
 
-    def get_adjacency_list(self, node_id: str,direction = 'forward', return_raw = False) -> list[str]:
+    def get_adjacency_list(self, node_id: bytes,direction = 'forward', return_raw = False) -> list[str]:
         """
         Returns the list of edge IDs connected to node_id.
         If none found, returns an empty list.
@@ -289,7 +352,7 @@ class GraphDB:
     # -----------------------
     # Deletion (Optional)
     # -----------------------
-    def delete_edge(self, edge_id: str):
+    def delete_edge(self, edge_id: str, edge_key_serializer= lambda x:  x.encode('utf-8')):
         """
         Removes the edge from the edge store, and from adjacency
         of both source and target nodes. If either node doesn't exist,
@@ -300,16 +363,20 @@ class GraphDB:
             return  # Edge not found
 
         # Remove edge_id from adjacency of source
-        self._remove_edge_from_adjacency(e.source, edge_id)
+        _source_edge_bytes = edge_key_serializer(e.source)
+        self._remove_edge_from_adjacency(_source_edge_bytes, edge_id)
         # Remove edge_id from adjacency of target
         if e.target != e.source:
-            self._remove_edge_from_adjacency(e.target, edge_id)
+            _target_edge_bytes = edge_key_serializer(e.target)
+            self._remove_edge_from_adjacency(_target_edge_bytes, edge_id)
 
         # If your store had a 'delete_edge' method, you'd call it here.
         # We'll assume you add that to KVStore if needed, e.g.:
         self.store.delete_edge(edge_id)
 
     def _remove_edge_from_adjacency(self, node_id: str, edge_id: str):
+
+        
         adj_list = self.get_adjacency_list(node_id,return_raw = True)
         _changed = False
         for _dir in ['source', 'target']:
@@ -323,7 +390,7 @@ class GraphDB:
     # -----------------------
     # BFS Example
     # -----------------------
-    def bfs(self, start_node_id: str, direction = 'any') -> list[str]:
+    def bfs(self, start_node_id: bytes, direction = 'any', edge_key_serializer = lambda x : x.encode('utf-8'), node_key_serializer = lambda x : x.encode('utf-8')) -> list[str]:
         """
         Returns a list of node_ids in BFS order starting from `start_node_id`.
         Demonstrates how adjacency is used for graph traversal.
@@ -343,18 +410,20 @@ class GraphDB:
             
             # 2) for each edge in adjacency, find the other node
             for e_id in edges_list:
-                edge_obj = self.get_edge(e_id)
+                _ser_edge_key = edge_key_serializer(e_id)
+                edge_obj = self.get_edge(_ser_edge_key)
                 if not edge_obj:
                     continue
+                _source_node = node_key_serializer(edge_obj.source)
                 neighbor = (
-                    edge_obj.target if edge_obj.source == current else edge_obj.source
+                    node_key_serializer(edge_obj.target) if _source_node == current else _source_node
                 )
                 if neighbor not in visited:
                     queue.append(neighbor)
 
         return result
 
-    def put_edges_bulk(self, edges: List[Edge]):
+    def put_edges_bulk(self, edges: List[Edge], edge_key_serializer = lambda x : x.encode('utf-8'), node_key_serializer = lambda x : x.encode('utf-8')):
         # 1) Build a dict[edge_id, bytes] to store all edges in one go
         edge_dict = {}
         # 2) Accumulate adjacency changes in memory: node_id -> set(edge_ids)
@@ -362,12 +431,12 @@ class GraphDB:
         # adjacency_accumulator_target = {}
         for e in edges:
             e_bytes = self.entity_serializer.serialize(e, 'Edge')
-            edge_dict[e.get_id] = e_bytes            
+            edge_dict[e.get_id_bytes] = e_bytes
             # adjacency accum update
             adjacency_accumulator.setdefault(e.source, {'target' : [], 'source' : []})
-            adjacency_accumulator[e.source]['source'].append(e.get_id)
+            adjacency_accumulator[e.source]['source'].append(e.get_id_bytes)
             adjacency_accumulator.setdefault(e.target, {'target' : [], 'source' : []})
-            adjacency_accumulator[e.target]['target'].append(e.get_id)
+            adjacency_accumulator[e.target]['target'].append(e.get_id_bytes)
             
         # 3) Use the store's put_edges_bulk
         self.store.put_edges_bulk(edge_dict)
@@ -381,7 +450,8 @@ class GraphDB:
         # union with new edges, and store in final_adjacency dict
         for node_id, new_edges_source_target in adjacency_accumulator.items():
             
-            raw_adj = self.store.get_adjacency(node_id)
+            raw_adj = self.store.get_adjacency(node_key_serializer(node_id))
+            # raw_adj = self.store.get_adjacency(node_id)
             if raw_adj is None:
                 old_edges = {'source' : set(),'target' : set()}
             else:
