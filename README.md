@@ -1,3 +1,4 @@
+<img src="assets/coverage_badge.svg">
 # PyGraphDB 
 
 A pure python GraphDB for attributed graphs. 
