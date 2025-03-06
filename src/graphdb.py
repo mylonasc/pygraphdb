@@ -193,10 +193,13 @@ class GraphDB:
     def delete_node(self, node_id):
         self.store.delete_node(node_id)
 
+    def node_key_to_bytes(self, node_key):
+        return node_key.encode('utf-8')
+
     # -----------
     # Edge Methods
     # -----------
-    def put_edge(self, edge: Edge, update_adjacency = True, node_key_to_bytes = lambda x : x.encode('utf-8')):
+    def put_edge(self, edge: Edge, update_adjacency = True):
         # edge_dict = edge.to_dict()
         value = self.entity_serializer.serialize(edge,'Edge')
         self.store.put_edge(edge.get_id_bytes, value)
@@ -205,7 +208,7 @@ class GraphDB:
             # and if they exist update them, if they don't exist 
             # create them.
             for dict_flag, io_node in zip(['source','target'], (edge.source, edge.target)): 
-                io_node_key = node_key_to_bytes(io_node)
+                io_node_key = self.node_key_to_bytes(io_node)
                 adj_list = self.store.get_adjacency(io_node_key)
                 new_edge_list = {dict_flag : [edge.get_id]}
                 if adj_list is None:
@@ -423,20 +426,23 @@ class GraphDB:
 
         return result
 
-    def put_edges_bulk(self, edges: List[Edge], edge_key_serializer = lambda x : x.encode('utf-8'), node_key_serializer = lambda x : x.encode('utf-8')):
+    def put_edges_bulk(self, edges: List[Edge]):
         # 1) Build a dict[edge_id, bytes] to store all edges in one go
         edge_dict = {}
         # 2) Accumulate adjacency changes in memory: node_id -> set(edge_ids)
         adjacency_accumulator = {} # the keys are "nodes" and the values are sets of edges for where the nodes appear as source or destinations (separately). 
         # adjacency_accumulator_target = {}
+
         for e in edges:
             e_bytes = self.entity_serializer.serialize(e, 'Edge')
+            _source = self.node_key_to_bytes(e.source)
+            _target = self.node_key_to_bytes(e.target)
             edge_dict[e.get_id_bytes] = e_bytes
             # adjacency accum update
-            adjacency_accumulator.setdefault(e.source, {'target' : [], 'source' : []})
-            adjacency_accumulator[e.source]['source'].append(e.get_id_bytes)
-            adjacency_accumulator.setdefault(e.target, {'target' : [], 'source' : []})
-            adjacency_accumulator[e.target]['target'].append(e.get_id_bytes)
+            adjacency_accumulator.setdefault(_source, {'target' : [], 'source' : []})
+            adjacency_accumulator[_source]['source'].append(e.get_id_bytes)
+            adjacency_accumulator.setdefault(_target, {'target' : [], 'source' : []})
+            adjacency_accumulator[_target]['target'].append(e.get_id_bytes)
             
         # 3) Use the store's put_edges_bulk
         self.store.put_edges_bulk(edge_dict)
@@ -449,8 +455,9 @@ class GraphDB:
         # For each node in adjacency_accumulator, fetch old adjacency,
         # union with new edges, and store in final_adjacency dict
         for node_id, new_edges_source_target in adjacency_accumulator.items():
-            
-            raw_adj = self.store.get_adjacency(node_key_serializer(node_id))
+
+            # raw_adj = self.store.get_adjacency(node_key_serializer(node_id))
+            raw_adj = self.store.get_adjacency(node_id)
             # raw_adj = self.store.get_adjacency(node_id)
             if raw_adj is None:
                 old_edges = {'source' : set(),'target' : set()}
