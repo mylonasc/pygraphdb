@@ -454,29 +454,32 @@ class GraphDB:
 
         # For each node in adjacency_accumulator, fetch old adjacency,
         # union with new edges, and store in final_adjacency dict
-        for node_id, new_edges_source_target in adjacency_accumulator.items():
+        try:
+            for node_id, new_edges_source_target in adjacency_accumulator.items():
 
-            # raw_adj = self.store.get_adjacency(node_key_serializer(node_id))
-            raw_adj = self.store.get_adjacency(node_id)
-            # raw_adj = self.store.get_adjacency(node_id)
-            if raw_adj is None:
-                old_edges = {'source' : set(),'target' : set()}
-            else:
-                old_edges = self.serializer.deserialize(raw_adj)
-                if 'target' not in old_edges:
-                    old_edges['target'] = set()
-                
-                if 'source' not in old_edges:
-                    old_edges['source'] = set()
-            source_edges = old_edges['source']
-            target_edges = old_edges['target']
-            if 'source' in new_edges_source_target:
-                source_edges = source_edges.union(new_edges_source_target['source'])
-            if 'target' in new_edges_source_target:
-                target_edges = target_edges.union(new_edges_source_target['target'])
-            # Here we cast to list because some objects do not support set serialization. 
-            new_adj_value = {'source' : list(source_edges),'target' : list(target_edges)}
-            final_adjacency[node_id] = self.entity_serializer.serialize(new_adj_value,'AdjacencyList')
+                # raw_adj = self.store.get_adjacency(node_key_serializer(node_id))
+                raw_adj = self.store.get_adjacency(node_id)
+                # raw_adj = self.store.get_adjacency(node_id)
+                if raw_adj is None:
+                    old_edges = {'source' : set(),'target' : set()}
+                else:
+                    old_edges = self.serializer.deserialize(raw_adj)
+                    if 'target' not in old_edges:
+                        old_edges['target'] = set()
+                    
+                    if 'source' not in old_edges:
+                        old_edges['source'] = set()
+                source_edges = old_edges['source']
+                target_edges = old_edges['target']
+                if 'source' in new_edges_source_target:
+                    source_edges = set(source_edges).union(new_edges_source_target['source'])
+                if 'target' in new_edges_source_target:
+                    target_edges = set(target_edges).union(new_edges_source_target['target'])
+                # Here we cast to list because some objects do not support set serialization. 
+                new_adj_value = {'source' : list(source_edges),'target' : list(target_edges)}
+                final_adjacency[node_id] = self.entity_serializer.serialize(new_adj_value,'AdjacencyList')
+        except:
+            return adjacency_accumulator, source_edges, target_edges
 
         # 5) One batch write for adjacency
         self.store.put_adjacency_bulk(final_adjacency)

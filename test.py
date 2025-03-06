@@ -8,7 +8,7 @@ from graphdb import GraphDB, Node, Edge
 
 import shutil
 import tempfile
-import unittest
+import unittest 
 import abc
 
 class AbstractGraphDBBase(unittest.TestCase):
@@ -117,7 +117,8 @@ class AbstractGraphDBBase(unittest.TestCase):
 
         # Bulk retrieval (if your GraphDB has get_nodes):
         # If not, we just do a loop.
-        retrieved = [self.graph_db.get_node(n.get_id_bytes) for n in nodes]
+        retrieved = self.graph_db.get_nodes([n.get_id_bytes for n in nodes])
+        # retrieved = [self.graph_db.get_node(n.get_id_bytes) for n in nodes]
 
         # Check the results
         for i, r in enumerate(retrieved):

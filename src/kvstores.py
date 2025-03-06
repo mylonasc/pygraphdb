@@ -71,7 +71,6 @@ class KVStore:
     def get_edges_bulk(self, edge_ids: list[str]) -> dict[str, bytes]:
         raise NotImplementedError
 
-
 # =========================================
 # LMDB Implementation
 # =========================================
@@ -112,8 +111,8 @@ class SimpleKV:
         
     def decode_db_key(self, key):
         v = self.get(key.encode('utf-8'))
+        return v
         
-
 
 class LMDBStore(KVStore):
     def __init__(self, path='graph_lmdb', map_size=10_485_760, map_id = True, map_keys = False):
@@ -193,17 +192,20 @@ class LMDBStore(KVStore):
     def put_nodes_bulk(self, keys_and_values: dict[bytes, bytes]):
         """Write a batch of nodes in a single transaction."""
         with self.env.begin(write=True, db=self.nodes_db) as txn:
-            for node_id, val in keys_and_values.items():
-                txn.put(node_id, val)
+            txn.putmulti([(k, v) for k , v in keys_and_values.items()])
+            # for node_id, val in keys_and_values.items():
+            #     txn.put(node_id, val)
     
     def get_nodes_bulk(self, node_ids: list[bytes]) -> dict[bytes, bytes]:
         """Retrieve multiple nodes in one read transaction."""
         results = {}
         with self.env.begin(write=False, db=self.nodes_db) as txn:
-            for node_id in node_ids:
-                data = txn.get(node_id)
+            with txn.cursor() as c:
+            # for node_id in node_ids:
+                data = c.getmulti(node_ids)
                 if data is not None:
-                    results[node_id] = data
+                    results.update({k : v for k, v in data})
+
         return results
     
     def put_edges_bulk(self, keys_and_values: dict[bytes, bytes]):
@@ -280,12 +282,18 @@ class LMDBStore(KVStore):
 class LevelDBStore(KVStore):
     def __init__(self, path='graph_leveldb'):
         """Create or open a LevelDB store. We'll store nodes/edges by prefix."""
+        
+        self.db_paths = {'nodes' : os.path.join('nodes'), 'edges': os.path.join('edges'), 'adjacency' : os.path.join('adjacency')}
         if not os.path.exists(path):
             os.makedirs(path, exist_ok=True)
         self.db_nodes = plyvel.DB(os.path.join(path, 'nodes'), create_if_missing=True)
         self.db_edges = plyvel.DB(os.path.join(path, 'edges'), create_if_missing=True)
         self.db_adj   = plyvel.DB(os.path.join(path, 'adjacency'), create_if_missing=True)
-
+        self.db_dict = {
+            'nodes' : self.db_nodes,
+            'edges' : self.db_edges,
+            'adjacency' : self.db_adj
+        }
     # def put(self, key: bytes, value: bytes):
     #     self.db.put(key, value)
 
@@ -294,11 +302,22 @@ class LevelDBStore(KVStore):
 
     # def delete(self, key: bytes):
     #     self.db.delete(key)
-
+    def get_db_path(self, db_string = 'nodes'):
+        return self.db_paths[db_string]
+    
     def range_iter(self, start_key: bytes, end_key: bytes):
         with self.db.iterator(start=start_key, stop=end_key) as it:
             for k, v in it:
                 yield k, v
+
+    def get_db_iterator(self, which_db = 'nodes'):
+        with self.db_dict[which_db].iterator() as it:
+            for k, v in it:
+                yield k, v
+
+    def get_node_keys_iterator(self):
+        return self.get_db_iterator(which_db='nodes')
+
 
     # -- Specialized methods for nodes
     def put_node(self, node_id: bytes, value: bytes):
