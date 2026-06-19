@@ -1,3 +1,5 @@
+from contextlib import contextmanager
+from threading import RLock
 from typing import Optional, Dict, List, Union
 import os
 
@@ -21,6 +23,26 @@ class KVStore:
     """
 
     # The basic K/V methods:
+    @contextmanager
+    def read_transaction(self):
+        """Open a backend read transaction.
+
+        Backends that do not support explicit transactions may use this no-op
+        implementation. Transaction-aware graph operations call this hook so
+        backends can provide snapshot reads where available.
+        """
+        yield self
+
+    @contextmanager
+    def write_transaction(self):
+        """Open a backend write transaction.
+
+        Backends that do not support explicit transactions may use this no-op
+        implementation. Correct durable backends should override this so graph
+        mutations can update nodes, edges, adjacency, and indexes atomically.
+        """
+        yield self
+
     def put(self, key: bytes, value: bytes):
         raise NotImplementedError
 
@@ -117,13 +139,28 @@ class InMemoryKVStore(KVStore):
 
     def __init__(self):
         """Create an empty in-memory store."""
+        self._lock = RLock()
         self.nodes = {}
         self.edges = {}
         self.adjacency = {}
+        self.out_adjacency = {}
+        self.in_adjacency = {}
         self.node_labels = {}
         self.node_properties = {}
         self.edge_types = {}
         self.edge_properties = {}
+
+    @contextmanager
+    def read_transaction(self):
+        """Acquire the store lock for a consistent in-memory read."""
+        with self._lock:
+            yield self
+
+    @contextmanager
+    def write_transaction(self):
+        """Acquire the store lock for an atomic in-memory mutation."""
+        with self._lock:
+            yield self
 
     def put(self, key: bytes, value: bytes):
         """Store a raw key-value pair in the node namespace.
@@ -132,7 +169,8 @@ class InMemoryKVStore(KVStore):
             key: Bytes key.
             value: Serialized value.
         """
-        self.nodes[key] = value
+        with self._lock:
+            self.nodes[key] = value
 
     def get(self, key: bytes) -> bytes:
         """Fetch a raw key-value pair from the node namespace.
@@ -143,7 +181,8 @@ class InMemoryKVStore(KVStore):
         Returns:
             Serialized value or ``None`` if missing.
         """
-        return self.nodes.get(key)
+        with self._lock:
+            return self.nodes.get(key)
 
     def delete(self, key: bytes):
         """Delete a raw key-value pair from the node namespace.
@@ -151,7 +190,8 @@ class InMemoryKVStore(KVStore):
         Args:
             key: Bytes key to delete.
         """
-        self.nodes.pop(key, None)
+        with self._lock:
+            self.nodes.pop(key, None)
 
     def range_iter(self, start_key: bytes, end_key: bytes):
         """Iterate raw node-namespace keys in an inclusive byte range.
@@ -163,9 +203,10 @@ class InMemoryKVStore(KVStore):
         Yields:
             ``(key, value)`` pairs in sorted key order.
         """
-        for key in sorted(self.nodes):
-            if start_key <= key <= end_key:
-                yield key, self.nodes[key]
+        with self._lock:
+            items = [(key, self.nodes[key]) for key in sorted(self.nodes) if start_key <= key <= end_key]
+        for item in items:
+            yield item
 
     def close(self):
         """Close the store.
@@ -181,7 +222,8 @@ class InMemoryKVStore(KVStore):
             node_id: Node key.
             value: Serialized node value.
         """
-        self.nodes[node_id] = value
+        with self._lock:
+            self.nodes[node_id] = value
 
     def get_node(self, node_id: bytes) -> bytes:
         """Fetch a serialized node record.
@@ -192,7 +234,8 @@ class InMemoryKVStore(KVStore):
         Returns:
             Serialized node value or ``None`` if missing.
         """
-        return self.nodes.get(node_id)
+        with self._lock:
+            return self.nodes.get(node_id)
 
     def delete_node(self, node_id: bytes):
         """Delete a node record.
@@ -200,7 +243,8 @@ class InMemoryKVStore(KVStore):
         Args:
             node_id: Node key.
         """
-        self.nodes.pop(node_id, None)
+        with self._lock:
+            self.nodes.pop(node_id, None)
 
     def put_edge(self, edge_id: bytes, value: bytes):
         """Store a serialized edge record.
@@ -209,7 +253,8 @@ class InMemoryKVStore(KVStore):
             edge_id: Edge key.
             value: Serialized edge value.
         """
-        self.edges[edge_id] = value
+        with self._lock:
+            self.edges[edge_id] = value
 
     def get_edge(self, edge_id: bytes) -> bytes:
         """Fetch a serialized edge record.
@@ -220,7 +265,8 @@ class InMemoryKVStore(KVStore):
         Returns:
             Serialized edge value or ``None`` if missing.
         """
-        return self.edges.get(edge_id)
+        with self._lock:
+            return self.edges.get(edge_id)
 
     def delete_edge(self, edge_id: bytes):
         """Delete an edge record.
@@ -228,7 +274,8 @@ class InMemoryKVStore(KVStore):
         Args:
             edge_id: Edge key.
         """
-        self.edges.pop(edge_id, None)
+        with self._lock:
+            self.edges.pop(edge_id, None)
 
     def put_nodes_bulk(self, keys_and_values: dict[bytes, bytes]):
         """Store multiple serialized node records.
@@ -236,7 +283,8 @@ class InMemoryKVStore(KVStore):
         Args:
             keys_and_values: Mapping of node keys to serialized node values.
         """
-        self.nodes.update(keys_and_values)
+        with self._lock:
+            self.nodes.update(keys_and_values)
 
     def get_nodes_bulk(self, node_ids: list[bytes]) -> dict[bytes, bytes]:
         """Fetch multiple serialized node records.
@@ -247,7 +295,8 @@ class InMemoryKVStore(KVStore):
         Returns:
             Mapping for IDs that exist. Missing IDs are omitted.
         """
-        return {node_id: self.nodes[node_id] for node_id in node_ids if node_id in self.nodes}
+        with self._lock:
+            return {node_id: self.nodes[node_id] for node_id in node_ids if node_id in self.nodes}
 
     def put_edges_bulk(self, keys_and_values: dict[bytes, bytes]):
         """Store multiple serialized edge records.
@@ -255,7 +304,8 @@ class InMemoryKVStore(KVStore):
         Args:
             keys_and_values: Mapping of edge keys to serialized edge values.
         """
-        self.edges.update(keys_and_values)
+        with self._lock:
+            self.edges.update(keys_and_values)
 
     def get_edges_bulk(self, edge_ids: list[bytes]) -> dict[bytes, bytes]:
         """Fetch multiple serialized edge records.
@@ -266,7 +316,8 @@ class InMemoryKVStore(KVStore):
         Returns:
             Mapping for IDs that exist. Missing IDs are omitted.
         """
-        return {edge_id: self.edges[edge_id] for edge_id in edge_ids if edge_id in self.edges}
+        with self._lock:
+            return {edge_id: self.edges[edge_id] for edge_id in edge_ids if edge_id in self.edges}
 
     def put_adjacency(self, node_id: bytes, value: bytes) -> None:
         """Store a serialized adjacency record for a node.
@@ -275,7 +326,8 @@ class InMemoryKVStore(KVStore):
             node_id: Node key.
             value: Serialized adjacency value.
         """
-        self.adjacency[node_id] = value
+        with self._lock:
+            self.adjacency[node_id] = value
 
     def get_adjacency(self, node_id: bytes) -> Optional[bytes]:
         """Fetch a serialized adjacency record.
@@ -286,7 +338,8 @@ class InMemoryKVStore(KVStore):
         Returns:
             Serialized adjacency value or ``None`` if missing.
         """
-        return self.adjacency.get(node_id)
+        with self._lock:
+            return self.adjacency.get(node_id)
 
     def put_adjacency_bulk(self, adj_dict: Dict[bytes, bytes]) -> None:
         """Store multiple serialized adjacency records.
@@ -294,7 +347,8 @@ class InMemoryKVStore(KVStore):
         Args:
             adj_dict: Mapping of node keys to serialized adjacency values.
         """
-        self.adjacency.update(adj_dict)
+        with self._lock:
+            self.adjacency.update(adj_dict)
 
     def get_adjacency_bulk(self, node_ids: List[bytes]) -> Dict[bytes, bytes]:
         """Fetch multiple serialized adjacency records.
@@ -305,7 +359,8 @@ class InMemoryKVStore(KVStore):
         Returns:
             Mapping for IDs that exist. Missing IDs are omitted.
         """
-        return {node_id: self.adjacency[node_id] for node_id in node_ids if node_id in self.adjacency}
+        with self._lock:
+            return {node_id: self.adjacency[node_id] for node_id in node_ids if node_id in self.adjacency}
 
     def get_node_keys_generator(self, num_nodes=None, key_offset=None):
         """Yield node keys in sorted order.
@@ -317,8 +372,10 @@ class InMemoryKVStore(KVStore):
         Yields:
             Node keys as bytes.
         """
+        with self._lock:
+            keys = sorted(self.nodes)
         yielded = 0
-        for key in sorted(self.nodes):
+        for key in keys:
             if key_offset is not None and key < key_offset:
                 continue
             yield key
@@ -336,8 +393,10 @@ class InMemoryKVStore(KVStore):
         Yields:
             Edge keys as bytes.
         """
+        with self._lock:
+            keys = sorted(self.edges)
         yielded = 0
-        for key in sorted(self.edges):
+        for key in keys:
             if key_offset is not None and key < key_offset:
                 continue
             yield key
@@ -353,16 +412,17 @@ class InMemoryKVStore(KVStore):
             old_node: Previous version of the same node, if this is an upsert.
                 It is removed from indexes before the new version is added.
         """
-        if old_node is not None:
-            self.unindex_node(old_node)
-        node_id = node.get_id
-        for label in node.labels:
-            self.node_labels.setdefault(label, set()).add(node_id)
-        for key, value in node.properties.items():
-            try:
-                self.node_properties.setdefault((key, value), set()).add(node_id)
-            except TypeError:
-                continue
+        with self._lock:
+            if old_node is not None:
+                self.unindex_node(old_node)
+            node_id = node.get_id
+            for label in node.labels:
+                self.node_labels.setdefault(label, set()).add(node_id)
+            for key, value in node.properties.items():
+                try:
+                    self.node_properties.setdefault((key, value), set()).add(node_id)
+                except TypeError:
+                    continue
 
     def unindex_node(self, node):
         """Remove a node from label/property indexes.
@@ -370,22 +430,23 @@ class InMemoryKVStore(KVStore):
         Args:
             node: Node to remove from indexes.
         """
-        node_id = node.get_id
-        for label in node.labels:
-            ids = self.node_labels.get(label)
-            if ids is not None:
-                ids.discard(node_id)
-                if not ids:
-                    self.node_labels.pop(label, None)
-        for key, value in node.properties.items():
-            try:
-                ids = self.node_properties.get((key, value))
-            except TypeError:
-                continue
-            if ids is not None:
-                ids.discard(node_id)
-                if not ids:
-                    self.node_properties.pop((key, value), None)
+        with self._lock:
+            node_id = node.get_id
+            for label in node.labels:
+                ids = self.node_labels.get(label)
+                if ids is not None:
+                    ids.discard(node_id)
+                    if not ids:
+                        self.node_labels.pop(label, None)
+            for key, value in node.properties.items():
+                try:
+                    ids = self.node_properties.get((key, value))
+                except TypeError:
+                    continue
+                if ids is not None:
+                    ids.discard(node_id)
+                    if not ids:
+                        self.node_properties.pop((key, value), None)
 
     def node_candidates(self, labels=None, properties=None):
         """Return candidate node IDs for exact label/property filters.
@@ -398,17 +459,18 @@ class InMemoryKVStore(KVStore):
             Sorted node IDs when at least one usable indexed filter exists.
             ``None`` means the caller should fall back to a full scan.
         """
-        sets = []
-        for label in labels or []:
-            sets.append(set(self.node_labels.get(label, set())))
-        for key, value in (properties or {}).items():
-            try:
-                sets.append(set(self.node_properties.get((key, value), set())))
-            except TypeError:
+        with self._lock:
+            sets = []
+            for label in labels or []:
+                sets.append(set(self.node_labels.get(label, set())))
+            for key, value in (properties or {}).items():
+                try:
+                    sets.append(set(self.node_properties.get((key, value), set())))
+                except TypeError:
+                    return None
+            if not sets:
                 return None
-        if not sets:
-            return None
-        return sorted(set.intersection(*sets))
+            return sorted(set.intersection(*sets))
 
     def index_edge(self, edge, old_edge=None):
         """Add an edge to type/property indexes.
@@ -418,16 +480,17 @@ class InMemoryKVStore(KVStore):
             old_edge: Previous version of the same edge, if this is an upsert.
                 It is removed from indexes before the new version is added.
         """
-        if old_edge is not None:
-            self.unindex_edge(old_edge)
-        edge_id = edge.get_id
-        if edge.type is not None:
-            self.edge_types.setdefault(edge.type, set()).add(edge_id)
-        for key, value in edge.properties.items():
-            try:
-                self.edge_properties.setdefault((key, value), set()).add(edge_id)
-            except TypeError:
-                continue
+        with self._lock:
+            if old_edge is not None:
+                self.unindex_edge(old_edge)
+            edge_id = edge.get_id
+            if edge.type is not None:
+                self.edge_types.setdefault(edge.type, set()).add(edge_id)
+            for key, value in edge.properties.items():
+                try:
+                    self.edge_properties.setdefault((key, value), set()).add(edge_id)
+                except TypeError:
+                    continue
 
     def unindex_edge(self, edge):
         """Remove an edge from type/property indexes.
@@ -435,22 +498,23 @@ class InMemoryKVStore(KVStore):
         Args:
             edge: Edge to remove from indexes.
         """
-        edge_id = edge.get_id
-        if edge.type is not None:
-            ids = self.edge_types.get(edge.type)
-            if ids is not None:
-                ids.discard(edge_id)
-                if not ids:
-                    self.edge_types.pop(edge.type, None)
-        for key, value in edge.properties.items():
-            try:
-                ids = self.edge_properties.get((key, value))
-            except TypeError:
-                continue
-            if ids is not None:
-                ids.discard(edge_id)
-                if not ids:
-                    self.edge_properties.pop((key, value), None)
+        with self._lock:
+            edge_id = edge.get_id
+            if edge.type is not None:
+                ids = self.edge_types.get(edge.type)
+                if ids is not None:
+                    ids.discard(edge_id)
+                    if not ids:
+                        self.edge_types.pop(edge.type, None)
+            for key, value in edge.properties.items():
+                try:
+                    ids = self.edge_properties.get((key, value))
+                except TypeError:
+                    continue
+                if ids is not None:
+                    ids.discard(edge_id)
+                    if not ids:
+                        self.edge_properties.pop((key, value), None)
 
     def edge_candidates(self, type=None, properties=None):
         """Return candidate edge IDs for exact type/property filters.
@@ -463,17 +527,77 @@ class InMemoryKVStore(KVStore):
             Sorted edge IDs when at least one usable indexed filter exists.
             ``None`` means the caller should fall back to a full scan.
         """
-        sets = []
-        if type is not None:
-            sets.append(set(self.edge_types.get(type, set())))
-        for key, value in (properties or {}).items():
-            try:
-                sets.append(set(self.edge_properties.get((key, value), set())))
-            except TypeError:
+        with self._lock:
+            sets = []
+            if type is not None:
+                sets.append(set(self.edge_types.get(type, set())))
+            for key, value in (properties or {}).items():
+                try:
+                    sets.append(set(self.edge_properties.get((key, value), set())))
+                except TypeError:
+                    return None
+            if not sets:
                 return None
-        if not sets:
-            return None
-        return sorted(set.intersection(*sets))
+            return sorted(set.intersection(*sets))
+
+    def add_adjacency_edge(self, source_id: str, target_id: str, edge_id: str) -> None:
+        """Add one directed adjacency entry without rewriting a node blob."""
+        with self._lock:
+            self.out_adjacency.setdefault(source_id, {})[edge_id] = target_id
+            self.in_adjacency.setdefault(target_id, {})[edge_id] = source_id
+
+    def remove_adjacency_edge(self, source_id: str, target_id: str, edge_id: str) -> None:
+        """Remove one directed adjacency entry."""
+        with self._lock:
+            out_edges = self.out_adjacency.get(source_id)
+            if out_edges is not None:
+                out_edges.pop(edge_id, None)
+                if not out_edges:
+                    self.out_adjacency.pop(source_id, None)
+            in_edges = self.in_adjacency.get(target_id)
+            if in_edges is not None:
+                in_edges.pop(edge_id, None)
+                if not in_edges:
+                    self.in_adjacency.pop(target_id, None)
+
+    def adjacency_edge_ids(self, node_id: str, direction: str = "out") -> list[str]:
+        """Return adjacent edge IDs from per-edge adjacency records."""
+        with self._lock:
+            if direction in {"out", "forward"}:
+                return sorted(self.out_adjacency.get(node_id, {}))
+            if direction in {"in", "backward"}:
+                return sorted(self.in_adjacency.get(node_id, {}))
+            if direction in {"both", "any"}:
+                return sorted(set(self.out_adjacency.get(node_id, {})) | set(self.in_adjacency.get(node_id, {})))
+        raise ValueError("direction must be 'out', 'in', or 'both'")
+
+    def neighbor_ids(self, node_id: str, direction: str = "out") -> list[str]:
+        """Return neighboring node IDs without reading edge records."""
+        with self._lock:
+            if direction in {"out", "forward"}:
+                return sorted(set(self.out_adjacency.get(node_id, {}).values()))
+            if direction in {"in", "backward"}:
+                return sorted(set(self.in_adjacency.get(node_id, {}).values()))
+            if direction in {"both", "any"}:
+                return sorted(
+                    set(self.out_adjacency.get(node_id, {}).values())
+                    | set(self.in_adjacency.get(node_id, {}).values())
+                )
+        raise ValueError("direction must be 'out', 'in', or 'both'")
+
+    def clear_indexes(self) -> None:
+        """Clear all secondary indexes and optimized adjacency records."""
+        with self._lock:
+            self.node_labels.clear()
+            self.node_properties.clear()
+            self.edge_types.clear()
+            self.edge_properties.clear()
+            self.out_adjacency.clear()
+            self.in_adjacency.clear()
+
+    def compact(self, destination_path=None):
+        """No-op compaction hook for the in-memory backend."""
+        return None
 
 # =========================================
 # LMDB Implementation
@@ -531,19 +655,79 @@ class LMDBStore(KVStore):
           - b'edges' for edge data
           - b'adj'   for adjacency lists
         """
-        max_dbs = 3
+        max_dbs = 6
         if map_keys:
             max_dbs += 2
+        self._txn_lock = RLock()
+        self._active_txn = None
         self.env = lmdb.open(path, map_size=map_size, subdir=True, max_dbs=max_dbs)
         self.nodes_db = self.env.open_db(b'nodes')
         self.edges_db = self.env.open_db(b'edges')
-        self.adj_db   = self.env.open_db(b'adj')        
+        self.adj_db   = self.env.open_db(b'adj')
+        self.out_adj_db = self.env.open_db(b'out_adj')
+        self.in_adj_db = self.env.open_db(b'in_adj')
+        self.index_db = self.env.open_db(b'indexes')
 
         if map_keys:
             self.node_key_encdec_db = self.env.open_db(b'node_key_db')
             self.edge_key_encdec_db = self.env.open_db(b'edge_key_db')
             self.node_key_encdec = SimpleKV(b'node_key_db')
             self.edge_key_encdec = SimpleKV(b'edge_key_db')
+
+    @contextmanager
+    def read_transaction(self):
+        """Open a read transaction or reuse the active write transaction."""
+        if self._active_txn is not None:
+            yield self
+            return
+        with self._txn_lock:
+            with self.env.begin(write=False) as txn:
+                self._active_txn = txn
+                try:
+                    yield self
+                finally:
+                    self._active_txn = None
+
+    @contextmanager
+    def write_transaction(self):
+        """Open one LMDB write transaction for a graph mutation."""
+        if self._active_txn is not None:
+            yield self
+            return
+        with self._txn_lock:
+            with self.env.begin(write=True) as txn:
+                self._active_txn = txn
+                try:
+                    yield self
+                finally:
+                    self._active_txn = None
+
+    @contextmanager
+    def _transaction(self, write=False):
+        if self._active_txn is not None:
+            yield self._active_txn
+        else:
+            with self.env.begin(write=write) as txn:
+                yield txn
+
+    def _scan_prefix(self, db, prefix: bytes):
+        with self._transaction(write=False) as txn:
+            with txn.cursor(db=db) as cursor:
+                if not cursor.set_range(prefix):
+                    return []
+                return [(k, v) for k, v in cursor if k.startswith(prefix)]
+
+    @staticmethod
+    def _part(value) -> bytes:
+        return str(value).encode('utf-8')
+
+    @staticmethod
+    def _prop_value(value) -> bytes:
+        return f"{type(value).__name__}:{repr(value)}".encode('utf-8')
+
+    @staticmethod
+    def _index_key(*parts) -> bytes:
+        return b'\x00'.join(part if isinstance(part, bytes) else str(part).encode('utf-8') for part in parts)
 
     # -- Basic methods (not used by GraphDB if we rely on specialized node/edge methods below)
     def put(self, key: bytes, value: bytes):
@@ -560,8 +744,8 @@ class LMDBStore(KVStore):
     def range_iter(self, start_key: bytes, end_key: bytes):
         # For demonstration, let us assume node range queries share a single sub-DB.
         # This might need refining.
-        with self.env.begin(write=False, db=self.nodes_db) as txn:
-            cursor = txn.cursor()
+        with self._transaction(write=False) as txn:
+            cursor = txn.cursor(db=self.nodes_db)
             if not cursor.set_range(start_key):
                 return
             for k, v in cursor:
@@ -574,67 +758,67 @@ class LMDBStore(KVStore):
 
     # -- Specialized node methods
     def put_node(self, node_id: bytes, value: bytes):
-        with self.env.begin(write=True, db=self.nodes_db) as txn:
-            txn.put(node_id, value)
+        with self._transaction(write=True) as txn:
+            txn.put(node_id, value, db=self.nodes_db)
 
     def get_node(self, node_id: bytes) -> bytes:
-        with self.env.begin(write=False, db=self.nodes_db) as txn:
-            return txn.get(node_id)
+        with self._transaction(write=False) as txn:
+            return txn.get(node_id, db=self.nodes_db)
 
     def delete_node(self, node_id: bytes):
-        with self.env.begin(write=True, db=self.nodes_db) as txn:
-            txn.delete(node_id)
+        with self._transaction(write=True) as txn:
+            txn.delete(node_id, db=self.nodes_db)
 
     # -- Specialized edge methods
     def put_edge(self, edge_id: bytes, value: bytes):
-        with self.env.begin(write=True, db=self.edges_db) as txn:
-            txn.put(edge_id, value)
+        with self._transaction(write=True) as txn:
+            txn.put(edge_id, value, db=self.edges_db)
 
     def get_edge(self, edge_id: str) -> bytes:
-        with self.env.begin(write=False, db=self.edges_db) as txn:
-            return txn.get(edge_id)
+        with self._transaction(write=False) as txn:
+            return txn.get(edge_id, db=self.edges_db)
 
     def delete_edge(self, edge_id: str):
-        with self.env.begin(write=True, db=self.edges_db) as txn:
-            txn.delete(edge_id)
+        with self._transaction(write=True) as txn:
+            txn.delete(edge_id, db=self.edges_db)
 
     def put_nodes_bulk(self, keys_and_values: dict[bytes, bytes]):
         """Write a batch of nodes in a single transaction."""
-        with self.env.begin(write=True, db=self.nodes_db) as txn:
-            txn.putmulti([(k, v) for k , v in keys_and_values.items()])
+        with self._transaction(write=True) as txn:
+            for k, v in keys_and_values.items():
+                txn.put(k, v, db=self.nodes_db)
             # for node_id, val in keys_and_values.items():
             #     txn.put(node_id, val)
     
     def get_nodes_bulk(self, node_ids: list[bytes]) -> dict[bytes, bytes]:
         """Retrieve multiple nodes in one read transaction."""
         results = {}
-        with self.env.begin(write=False, db=self.nodes_db) as txn:
-            with txn.cursor() as c:
-            # for node_id in node_ids:
-                data = c.getmulti(node_ids)
+        with self._transaction(write=False) as txn:
+            for node_id in node_ids:
+                data = txn.get(node_id, db=self.nodes_db)
                 if data is not None:
-                    results.update({k : v for k, v in data})
+                    results[node_id] = data
 
         return results
     
     def put_edges_bulk(self, keys_and_values: dict[bytes, bytes]):
-        with self.env.begin(write=True, db=self.edges_db) as txn:
+        with self._transaction(write=True) as txn:
             for edge_id, val in keys_and_values.items():
-                txn.put(edge_id, val)
+                txn.put(edge_id, val, db=self.edges_db)
     
     def get_edges_bulk(self, edge_ids: list[bytes]) -> dict[bytes, bytes]:
         results = {}
-        with self.env.begin(write=False, db=self.edges_db) as txn:
+        with self._transaction(write=False) as txn:
             for edge_id in edge_ids:
-                data = txn.get(edge_id)
+                data = txn.get(edge_id, db=self.edges_db)
                 if data is not None:
                     results[edge_id] = data
         return results
     
     def get_node_keys_generator(self, num_nodes = None, key_offset = None):
         yielded = 0
-        with self.env.begin(write = False, db = self.nodes_db) as txn:
-            with txn.cursor() as c:
+        with self._transaction(write=False) as txn:
+            with txn.cursor(db=self.nodes_db) as c:
                 if key_offset is not None:
                     c.set_range(key_offset)
                 for k, _ in c:
@@ -645,8 +829,8 @@ class LMDBStore(KVStore):
 
     def get_edge_keys_generator(self, num_edges = None, key_offset = None):
         yielded = 0
-        with self.env.begin(write = False, db = self.edges_db) as txn:
-            with txn.cursor() as c:
+        with self._transaction(write=False) as txn:
+            with txn.cursor(db=self.edges_db) as c:
                 if key_offset is not None:
                     c.set_range(key_offset)
                 for k, _ in c:
@@ -657,13 +841,13 @@ class LMDBStore(KVStore):
 
     # ----- Adjacency Methods -----
     def put_adjacency(self, node_id: bytes, value: bytes) -> None:
-        with self.env.begin(write=True, db=self.adj_db) as txn:
-            txn.put(node_id, value)
+        with self._transaction(write=True) as txn:
+            txn.put(node_id, value, db=self.adj_db)
 
     def get_adjacency(self, node_id: Union[bytes, str]) -> Optional[bytes]:
-        with self.env.begin(write=False, db=self.adj_db) as txn:
+        with self._transaction(write=False) as txn:
             if isinstance(node_id, bytes):
-                return txn.get(node_id)
+                return txn.get(node_id, db=self.adj_db)
             else:
                 raise Exception('Get adjacency requires the bytes! (serialized data)')
 
@@ -675,9 +859,9 @@ class LMDBStore(KVStore):
         Insert/update multiple adjacency lists in one transaction.
         :param adj_dict: a dict mapping node_id -> serialized adjacency (list of edges)
         """
-        with self.env.begin(write=True, db=self.adj_db) as txn:
+        with self._transaction(write=True) as txn:
             for node_id, val in adj_dict.items():
-                txn.put(node_id, val)
+                txn.put(node_id, val, db=self.adj_db)
 
     # -------------------------------------------------------------------------
     # Bulk Read: Adjacency
@@ -688,12 +872,152 @@ class LMDBStore(KVStore):
         Returns a dict { node_id: serialized adjacency } for all found items.
         """
         results = {}
-        with self.env.begin(write=False, db=self.adj_db) as txn:
+        with self._transaction(write=False) as txn:
             for node_id in node_ids:
-                data = txn.get(node_id)
+                data = txn.get(node_id, db=self.adj_db)
                 if data is not None:
                     results[node_id] = data
         return results
+
+    def add_adjacency_edge(self, source_id: str, target_id: str, edge_id: str) -> None:
+        source = self._part(source_id)
+        target = self._part(target_id)
+        edge = self._part(edge_id)
+        with self._transaction(write=True) as txn:
+            txn.put(self._index_key(b'out', source, edge), target, db=self.out_adj_db)
+            txn.put(self._index_key(b'in', target, edge), source, db=self.in_adj_db)
+
+    def remove_adjacency_edge(self, source_id: str, target_id: str, edge_id: str) -> None:
+        source = self._part(source_id)
+        target = self._part(target_id)
+        edge = self._part(edge_id)
+        with self._transaction(write=True) as txn:
+            txn.delete(self._index_key(b'out', source, edge), db=self.out_adj_db)
+            txn.delete(self._index_key(b'in', target, edge), db=self.in_adj_db)
+
+    def adjacency_edge_ids(self, node_id: str, direction: str = "out") -> list[str]:
+        node = self._part(node_id)
+        if direction in {"out", "forward"}:
+            prefix = self._index_key(b'out', node) + b'\x00'
+            return sorted(k[len(prefix):].decode('utf-8') for k, _ in self._scan_prefix(self.out_adj_db, prefix))
+        if direction in {"in", "backward"}:
+            prefix = self._index_key(b'in', node) + b'\x00'
+            return sorted(k[len(prefix):].decode('utf-8') for k, _ in self._scan_prefix(self.in_adj_db, prefix))
+        if direction in {"both", "any"}:
+            return sorted(set(self.adjacency_edge_ids(node_id, "out")) | set(self.adjacency_edge_ids(node_id, "in")))
+        raise ValueError("direction must be 'out', 'in', or 'both'")
+
+    def neighbor_ids(self, node_id: str, direction: str = "out") -> list[str]:
+        node = self._part(node_id)
+        if direction in {"out", "forward"}:
+            prefix = self._index_key(b'out', node) + b'\x00'
+            return sorted(set(v.decode('utf-8') for _, v in self._scan_prefix(self.out_adj_db, prefix)))
+        if direction in {"in", "backward"}:
+            prefix = self._index_key(b'in', node) + b'\x00'
+            return sorted(set(v.decode('utf-8') for _, v in self._scan_prefix(self.in_adj_db, prefix)))
+        if direction in {"both", "any"}:
+            return sorted(set(self.neighbor_ids(node_id, "out")) | set(self.neighbor_ids(node_id, "in")))
+        raise ValueError("direction must be 'out', 'in', or 'both'")
+
+    def index_node(self, node, old_node=None):
+        with self._transaction(write=True) as txn:
+            if old_node is not None:
+                self.unindex_node(old_node)
+            node_id = self._part(node.get_id)
+            for label in node.labels:
+                txn.put(self._index_key(b'nl', self._part(label), node_id), b'', db=self.index_db)
+            for key, value in node.properties.items():
+                try:
+                    hash(value)
+                except TypeError:
+                    continue
+                txn.put(self._index_key(b'np', self._part(key), self._prop_value(value), node_id), b'', db=self.index_db)
+
+    def unindex_node(self, node):
+        with self._transaction(write=True) as txn:
+            node_id = self._part(node.get_id)
+            for label in node.labels:
+                txn.delete(self._index_key(b'nl', self._part(label), node_id), db=self.index_db)
+            for key, value in node.properties.items():
+                try:
+                    hash(value)
+                except TypeError:
+                    continue
+                txn.delete(self._index_key(b'np', self._part(key), self._prop_value(value), node_id), db=self.index_db)
+
+    def node_candidates(self, labels=None, properties=None):
+        sets = []
+        for label in labels or []:
+            prefix = self._index_key(b'nl', self._part(label)) + b'\x00'
+            sets.append({k[len(prefix):].decode('utf-8') for k, _ in self._scan_prefix(self.index_db, prefix)})
+        for key, value in (properties or {}).items():
+            try:
+                hash(value)
+            except TypeError:
+                return None
+            prefix = self._index_key(b'np', self._part(key), self._prop_value(value)) + b'\x00'
+            sets.append({k[len(prefix):].decode('utf-8') for k, _ in self._scan_prefix(self.index_db, prefix)})
+        if not sets:
+            return None
+        return sorted(set.intersection(*sets))
+
+    def index_edge(self, edge, old_edge=None):
+        with self._transaction(write=True) as txn:
+            if old_edge is not None:
+                self.unindex_edge(old_edge)
+            edge_id = self._part(edge.get_id)
+            if edge.type is not None:
+                txn.put(self._index_key(b'et', self._part(edge.type), edge_id), b'', db=self.index_db)
+            for key, value in edge.properties.items():
+                try:
+                    hash(value)
+                except TypeError:
+                    continue
+                txn.put(self._index_key(b'ep', self._part(key), self._prop_value(value), edge_id), b'', db=self.index_db)
+
+    def unindex_edge(self, edge):
+        with self._transaction(write=True) as txn:
+            edge_id = self._part(edge.get_id)
+            if edge.type is not None:
+                txn.delete(self._index_key(b'et', self._part(edge.type), edge_id), db=self.index_db)
+            for key, value in edge.properties.items():
+                try:
+                    hash(value)
+                except TypeError:
+                    continue
+                txn.delete(self._index_key(b'ep', self._part(key), self._prop_value(value), edge_id), db=self.index_db)
+
+    def edge_candidates(self, type=None, properties=None):
+        sets = []
+        if type is not None:
+            prefix = self._index_key(b'et', self._part(type)) + b'\x00'
+            sets.append({k[len(prefix):].decode('utf-8') for k, _ in self._scan_prefix(self.index_db, prefix)})
+        for key, value in (properties or {}).items():
+            try:
+                hash(value)
+            except TypeError:
+                return None
+            prefix = self._index_key(b'ep', self._part(key), self._prop_value(value)) + b'\x00'
+            sets.append({k[len(prefix):].decode('utf-8') for k, _ in self._scan_prefix(self.index_db, prefix)})
+        if not sets:
+            return None
+        return sorted(set.intersection(*sets))
+
+    def clear_indexes(self) -> None:
+        with self._transaction(write=True) as txn:
+            for db in (self.index_db, self.out_adj_db, self.in_adj_db):
+                with txn.cursor(db=db) as cursor:
+                    if cursor.first():
+                        while True:
+                            cursor.delete()
+                            if not cursor.next():
+                                break
+
+    def compact(self, destination_path=None):
+        if destination_path is None:
+            raise ValueError("LMDB compaction requires a destination_path")
+        self.env.copy(destination_path, compact=True)
+        return destination_path
 
 
 # =========================================

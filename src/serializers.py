@@ -3,6 +3,7 @@
 # =========================================
 import pickle
 import json
+import msgpack
 
 class Serializer:
     """Abstract serializer interface for graph records.
@@ -73,6 +74,42 @@ class PickleSerializer(Serializer):
             Deserialized dictionary.
         """
         return pickle.loads(data)
+
+
+class MessagePackSerializer(Serializer):
+    """Serializer backed by MessagePack.
+
+    MessagePack is a compact, well-supported binary format that safely handles
+    standard data types without executing code during deserialization. It is the
+    recommended serializer for persistent graph data.
+
+    Example:
+        >>> serializer = MessagePackSerializer()
+        >>> serializer.deserialize(serializer.serialize({"name": "Alice"}))
+        {'name': 'Alice'}
+    """
+
+    def serialize(self, obj: dict) -> bytes:
+        """Serialize a dictionary with MessagePack.
+
+        Args:
+            obj: MessagePack-serializable dictionary.
+
+        Returns:
+            MessagePack encoded bytes.
+        """
+        return msgpack.packb(obj, use_bin_type=True)
+
+    def deserialize(self, data: bytes) -> dict:
+        """Deserialize MessagePack bytes into a dictionary.
+
+        Args:
+            data: MessagePack encoded bytes.
+
+        Returns:
+            Deserialized dictionary.
+        """
+        return msgpack.unpackb(data, raw=False)
 
 
 class JSONSerializer(Serializer):

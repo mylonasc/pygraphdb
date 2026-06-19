@@ -8,6 +8,9 @@ version = "0.1.0"
 description = "A pure Python GraphDB for attributed graphs."
 readme = "README.md"
 requires-python = ">=3.9"
+dependencies = [
+    "msgpack>=1.0.0",
+]
 
 [project.optional-dependencies]
 lmdb = ["lmdb"]

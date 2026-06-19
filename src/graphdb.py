@@ -353,11 +353,12 @@ class GraphDB:
             >>> graph.get_node("alice").labels
             frozenset({'Person'})
         """
-        old_node = self.get_node(node.get_id)
-        self.store.put_node(node.get_id_bytes, self.entity_serializer.serialize(node, "Node"))
-        if hasattr(self.store, "index_node"):
-            self.store.index_node(node, old_node=old_node)
-        return node
+        with self.store.write_transaction():
+            old_node = self.get_node(node.get_id)
+            self.store.put_node(node.get_id_bytes, self.entity_serializer.serialize(node, "Node"))
+            if hasattr(self.store, "index_node"):
+                self.store.index_node(node, old_node=old_node)
+            return node
 
     add_node = put_node
 
@@ -370,8 +371,13 @@ class GraphDB:
         Returns:
             The node, or ``None`` when it does not exist.
         """
-        data = self.store.get_node(_id_to_key(node_id))
-        return self.entity_serializer.deserialize(data, "Node") if data is not None else None
+        with self.store.read_transaction():
+            data = self.store.get_node(_id_to_key(node_id))
+            return self.entity_serializer.deserialize(data, "Node") if data is not None else None
+
+    def has_node(self, node_id) -> bool:
+        """Return true if a node exists."""
+        return self.get_node(node_id) is not None
 
     def require_node(self, node_id) -> Node:
         """Fetch a node or raise if it is missing.
@@ -412,6 +418,51 @@ class GraphDB:
             node.labels = frozenset(labels)
         return self.put_node(node)
 
+    def add_label(self, node_id, label: str) -> Node:
+        """Add one label to a node and update indexes."""
+        node = self.require_node(node_id)
+        node.labels = frozenset(set(node.labels) | {label})
+        return self.put_node(node)
+
+    def remove_label(self, node_id, label: str) -> Node:
+        """Remove one label from a node and update indexes."""
+        node = self.require_node(node_id)
+        node.labels = frozenset(set(node.labels) - {label})
+        return self.put_node(node)
+
+    def rename_label(self, old_label: str, new_label: str) -> int:
+        """Rename a node label across all matching nodes.
+
+        Returns:
+            Number of updated nodes.
+        """
+        updated = 0
+        with self.store.write_transaction():
+            for node in list(self.find_nodes(labels=[old_label])):
+                labels = set(node.labels)
+                labels.discard(old_label)
+                labels.add(new_label)
+                node.labels = frozenset(labels)
+                self.put_node(node)
+                updated += 1
+        return updated
+
+    def node_properties(self, node_id) -> dict:
+        """Return a copy of a node's property mapping."""
+        return dict(self.require_node(node_id).properties)
+
+    def set_node_property(self, node_id, key: str, value) -> Node:
+        """Set one node property and update indexes."""
+        node = self.require_node(node_id)
+        node.properties[key] = value
+        return self.put_node(node)
+
+    def remove_node_property(self, node_id, key: str) -> Node:
+        """Remove one node property if present and update indexes."""
+        node = self.require_node(node_id)
+        node.properties.pop(key, None)
+        return self.put_node(node)
+
     def delete_node(self, node_id, mode: str = "restrict") -> None:
         """Delete a node using explicit incident-edge semantics.
 
@@ -437,20 +488,21 @@ class GraphDB:
             >>> graph.get_edge("e1") is None
             True
         """
-        node_id_str = _id_to_str(node_id)
-        self.require_node(node_id_str)
-        incident = self.incident_edges(node_id_str)
-        if incident and mode == "restrict":
-            raise ConstraintError(f"node has incident edges: {node_id_str}")
-        if mode not in {"restrict", "detach", "cascade"}:
-            raise ValueError("mode must be 'restrict', 'detach', or 'cascade'")
-        if mode in {"detach", "cascade"}:
-            for edge in list(incident):
-                self.delete_edge(edge.get_id)
-        if hasattr(self.store, "unindex_node"):
-            self.store.unindex_node(self.require_node(node_id_str))
-        self.store.delete_node(_id_to_key(node_id_str))
-        self._put_adjacency(node_id_str, {"out": set(), "in": set()})
+        with self.store.write_transaction():
+            node_id_str = _id_to_str(node_id)
+            self.require_node(node_id_str)
+            incident = self.incident_edges(node_id_str)
+            if incident and mode == "restrict":
+                raise ConstraintError(f"node has incident edges: {node_id_str}")
+            if mode not in {"restrict", "detach", "cascade"}:
+                raise ValueError("mode must be 'restrict', 'detach', or 'cascade'")
+            if mode in {"detach", "cascade"}:
+                for edge in list(incident):
+                    self.delete_edge(edge.get_id)
+            if hasattr(self.store, "unindex_node"):
+                self.store.unindex_node(self.require_node(node_id_str))
+            self.store.delete_node(_id_to_key(node_id_str))
+            self._put_adjacency(node_id_str, {"out": set(), "in": set()})
 
     def put_nodes(self, nodes: Iterable[Node]):
         """Insert or replace multiple nodes.
@@ -480,6 +532,11 @@ class GraphDB:
         return [self.entity_serializer.deserialize(raw[key], "Node") if key in raw else None for key in keys]
 
     def put_edge(self, edge: Edge, validate: bool = True):
+        """Insert or replace an edge inside one backend write transaction."""
+        with self.store.write_transaction():
+            return self._put_edge(edge, validate=validate)
+
+    def _put_edge(self, edge: Edge, validate: bool = True):
         """Insert or replace an edge and maintain adjacency/index records.
 
         Edge upserts are idempotent. If an existing edge changes endpoints, old
@@ -525,15 +582,23 @@ class GraphDB:
 
         try:
             if existing is not None:
-                self._remove_edge_from_adjacency(existing.source, existing.get_id, "out")
-                self._remove_edge_from_adjacency(existing.target, existing.get_id, "in")
+                if hasattr(self.store, "remove_adjacency_edge"):
+                    self.store.remove_adjacency_edge(existing.source, existing.target, existing.get_id)
+                else:
+                    self._remove_edge_from_adjacency(existing.source, existing.get_id, "out")
+                    self._remove_edge_from_adjacency(existing.target, existing.get_id, "in")
 
             self.store.put_edge(edge.get_id_bytes, self.entity_serializer.serialize(edge, "Edge"))
             if hasattr(self.store, "index_edge"):
                 self.store.index_edge(edge, old_edge=existing)
-            self._add_edge_to_adjacency(edge.source, edge.get_id, "out")
-            self._add_edge_to_adjacency(edge.target, edge.get_id, "in")
+            if hasattr(self.store, "add_adjacency_edge"):
+                self.store.add_adjacency_edge(edge.source, edge.target, edge.get_id)
+            else:
+                self._add_edge_to_adjacency(edge.source, edge.get_id, "out")
+                self._add_edge_to_adjacency(edge.target, edge.get_id, "in")
         except Exception:
+            if hasattr(self.store, "remove_adjacency_edge"):
+                self.store.remove_adjacency_edge(edge.source, edge.target, edge.get_id)
             if existing is None:
                 self.store.delete_edge(edge.get_id_bytes)
                 if hasattr(self.store, "unindex_edge"):
@@ -542,8 +607,11 @@ class GraphDB:
                 self.store.put_edge(existing.get_id_bytes, self.entity_serializer.serialize(existing, "Edge"))
                 if hasattr(self.store, "index_edge"):
                     self.store.index_edge(existing, old_edge=edge)
-            for node_id, adjacency in old_adjacency.items():
-                self._put_adjacency(node_id, adjacency)
+                if hasattr(self.store, "add_adjacency_edge"):
+                    self.store.add_adjacency_edge(existing.source, existing.target, existing.get_id)
+            if not hasattr(self.store, "add_adjacency_edge"):
+                for node_id, adjacency in old_adjacency.items():
+                    self._put_adjacency(node_id, adjacency)
             raise
         return edge
 
@@ -560,6 +628,10 @@ class GraphDB:
         """
         data = self.store.get_edge(_id_to_key(edge_id))
         return self.entity_serializer.deserialize(data, "Edge") if data is not None else None
+
+    def has_edge(self, edge_id) -> bool:
+        """Return true if an edge exists."""
+        return self.get_edge(edge_id) is not None
 
     def require_edge(self, edge_id) -> Edge:
         """Fetch an edge or raise if it is missing.
@@ -606,7 +678,42 @@ class GraphDB:
             edge.type = type
         return self.put_edge(edge)
 
+    def edge_properties(self, edge_id) -> dict:
+        """Return a copy of an edge's property mapping."""
+        return dict(self.require_edge(edge_id).properties)
+
+    def set_edge_property(self, edge_id, key: str, value) -> Edge:
+        """Set one edge property and update indexes."""
+        edge = self.require_edge(edge_id)
+        edge.properties[key] = value
+        return self.put_edge(edge)
+
+    def remove_edge_property(self, edge_id, key: str) -> Edge:
+        """Remove one edge property if present and update indexes."""
+        edge = self.require_edge(edge_id)
+        edge.properties.pop(key, None)
+        return self.put_edge(edge)
+
+    def rename_edge_type(self, old_type: str, new_type: str) -> int:
+        """Rename an edge type across all matching edges.
+
+        Returns:
+            Number of updated edges.
+        """
+        updated = 0
+        with self.store.write_transaction():
+            for edge in list(self.find_edges(type=old_type)):
+                edge.type = new_type
+                self.put_edge(edge)
+                updated += 1
+        return updated
+
     def delete_edge(self, edge_id) -> None:
+        """Delete an edge inside one backend write transaction."""
+        with self.store.write_transaction():
+            self._delete_edge(edge_id)
+
+    def _delete_edge(self, edge_id) -> None:
         """Delete an edge and remove it from endpoint adjacency lists.
 
         Missing edges are treated as a no-op. If backend deletion fails after
@@ -624,8 +731,11 @@ class GraphDB:
             edge.target: self._get_adjacency(edge.target),
         }
         try:
-            self._remove_edge_from_adjacency(edge.source, edge.get_id, "out")
-            self._remove_edge_from_adjacency(edge.target, edge.get_id, "in")
+            if hasattr(self.store, "remove_adjacency_edge"):
+                self.store.remove_adjacency_edge(edge.source, edge.target, edge.get_id)
+            else:
+                self._remove_edge_from_adjacency(edge.source, edge.get_id, "out")
+                self._remove_edge_from_adjacency(edge.target, edge.get_id, "in")
             if hasattr(self.store, "unindex_edge"):
                 self.store.unindex_edge(edge)
             self.store.delete_edge(edge.get_id_bytes)
@@ -633,8 +743,11 @@ class GraphDB:
             self.store.put_edge(edge.get_id_bytes, self.entity_serializer.serialize(edge, "Edge"))
             if hasattr(self.store, "index_edge"):
                 self.store.index_edge(edge)
-            for node_id, adjacency in old_adjacency.items():
-                self._put_adjacency(node_id, adjacency)
+            if hasattr(self.store, "add_adjacency_edge"):
+                self.store.add_adjacency_edge(edge.source, edge.target, edge.get_id)
+            else:
+                for node_id, adjacency in old_adjacency.items():
+                    self._put_adjacency(node_id, adjacency)
             raise
 
     def put_edges_bulk(self, edges: Iterable[Edge], validate: bool = True):
@@ -681,6 +794,14 @@ class GraphDB:
         Raises:
             ValueError: If ``direction`` is unsupported.
         """
+        node_id_str = _id_to_str(node_id)
+        if hasattr(self.store, "adjacency_edge_ids"):
+            if return_raw:
+                return {
+                    "out": set(self.store.adjacency_edge_ids(node_id_str, "out")),
+                    "in": set(self.store.adjacency_edge_ids(node_id_str, "in")),
+                }
+            return self.store.adjacency_edge_ids(node_id_str, direction)
         adjacency = self._get_adjacency(node_id)
         if return_raw:
             return adjacency
@@ -747,6 +868,8 @@ class GraphDB:
             ['b']
         """
         node_id_str = _id_to_str(node_id)
+        if hasattr(self.store, "neighbor_ids"):
+            return self.store.neighbor_ids(node_id_str, direction=direction)
         edges = self.incident_edges(node_id_str) if direction in {"both", "any"} else (
             self.out_edges(node_id_str) if direction in {"out", "forward"} else self.in_edges(node_id_str)
         )
@@ -793,6 +916,26 @@ class GraphDB:
             Number of incoming edges.
         """
         return self.degree(node_id, "in")
+
+    def count_nodes(self, labels: Optional[Iterable[str]] = None, properties: Optional[dict] = None) -> int:
+        """Count nodes, optionally using label/property filters."""
+        if labels or properties:
+            return len(self.find_nodes(labels=labels, properties=properties))
+        return sum(1 for _ in self.iter_nodes())
+
+    def count_edges(self, type: Optional[str] = None, source=None, target=None, properties: Optional[dict] = None) -> int:
+        """Count edges, optionally using type/endpoint/property filters."""
+        if type is not None or source is not None or target is not None or properties:
+            return len(self.find_edges(type=type, source=source, target=target, properties=properties))
+        return sum(1 for _ in self.iter_edges())
+
+    def nodes_by_label(self, label: str) -> list[Node]:
+        """Return nodes containing a label."""
+        return self.find_nodes(labels=[label])
+
+    def edges_by_type(self, type: str) -> list[Edge]:
+        """Return edges with an edge type."""
+        return self.find_edges(type=type)
 
     def bfs(self, start_node_id, direction="out", max_depth: Optional[int] = None) -> list[str]:
         """Traverse reachable nodes with breadth-first search.
@@ -967,6 +1110,51 @@ class GraphDB:
                 continue
             result.append(edge)
         return result
+
+    def check_integrity(self) -> dict:
+        """Check node, edge, and adjacency consistency.
+
+        Returns:
+            Dictionary with ``ok`` and ``errors`` keys.
+        """
+        errors = []
+        node_ids = {node.get_id for node in self.iter_nodes()}
+        edge_ids = set()
+        for edge in self.iter_edges():
+            edge_ids.add(edge.get_id)
+            if edge.source not in node_ids:
+                errors.append(f"edge {edge.get_id} has missing source {edge.source}")
+            if edge.target not in node_ids:
+                errors.append(f"edge {edge.get_id} has missing target {edge.target}")
+            if edge.get_id not in self.get_adjacency_list(edge.source, "out"):
+                errors.append(f"edge {edge.get_id} missing from source adjacency")
+            if edge.get_id not in self.get_adjacency_list(edge.target, "in"):
+                errors.append(f"edge {edge.get_id} missing from target adjacency")
+        for node_id in node_ids:
+            for edge_id in self.get_adjacency_list(node_id, "both"):
+                if edge_id not in edge_ids:
+                    errors.append(f"node {node_id} references missing edge {edge_id}")
+        return {"ok": not errors, "errors": errors}
+
+    def rebuild_indexes(self) -> None:
+        """Rebuild backend-maintained indexes and optimized adjacency records."""
+        with self.store.write_transaction():
+            if hasattr(self.store, "clear_indexes"):
+                self.store.clear_indexes()
+            for node in self.iter_nodes():
+                if hasattr(self.store, "index_node"):
+                    self.store.index_node(node)
+            for edge in self.iter_edges():
+                if hasattr(self.store, "index_edge"):
+                    self.store.index_edge(edge)
+                if hasattr(self.store, "add_adjacency_edge"):
+                    self.store.add_adjacency_edge(edge.source, edge.target, edge.get_id)
+
+    def compact(self, destination_path: Optional[str] = None):
+        """Compact the underlying store when the backend supports it."""
+        if not hasattr(self.store, "compact"):
+            return None
+        return self.store.compact(destination_path)
 
     def _get_adjacency(self, node_id) -> dict[str, set[str]]:
         raw = self.store.get_adjacency(_id_to_key(node_id))
