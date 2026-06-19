@@ -1,5 +1,3 @@
-import lmdb
-import plyvel
 from typing import Optional, Dict, List, Union
 import os
 
@@ -12,7 +10,15 @@ def _unpack_long_int(int_val):
 
 
 class KVStore:
-    """Abstract interface for a simple key-value store."""
+    """Abstract storage contract used by :class:`graphdb.GraphDB`.
+
+    A backend stores serialized node, edge, and adjacency records under bytes
+    keys. GraphDB owns graph-level semantics; backends provide durable or
+    in-memory key-value operations and optional secondary-index hooks.
+
+    Implementations should treat missing deletes as no-ops and missing reads as
+    ``None``.
+    """
 
     # The basic K/V methods:
     def put(self, key: bytes, value: bytes):
@@ -71,6 +77,404 @@ class KVStore:
     def get_edges_bulk(self, edge_ids: list[str]) -> dict[str, bytes]:
         raise NotImplementedError
 
+    def put_adjacency(self, node_id: bytes, value: bytes) -> None:
+        raise NotImplementedError
+
+    def get_adjacency(self, node_id: bytes) -> Optional[bytes]:
+        raise NotImplementedError
+
+    def put_adjacency_bulk(self, adj_dict: Dict[bytes, bytes]) -> None:
+        raise NotImplementedError
+
+    def get_adjacency_bulk(self, node_ids: List[bytes]) -> Dict[bytes, bytes]:
+        raise NotImplementedError
+
+    def get_node_keys_generator(self, num_nodes=None, key_offset=None):
+        raise NotImplementedError
+
+    def get_edge_keys_generator(self, num_edges=None, key_offset=None):
+        raise NotImplementedError
+
+
+class InMemoryKVStore(KVStore):
+    """Deterministic in-memory backend for tests and small embedded graphs.
+
+    The store keeps separate dictionaries for node records, edge records, and
+    adjacency records. It also maintains exact-match indexes for node labels,
+    node properties, edge types, and edge properties. These indexes are optional
+    hooks consumed by :class:`graphdb.GraphDB`; backends that do not implement
+    them still work via scans.
+
+    Example:
+        >>> from graphdb import Edge, GraphDB, Node
+        >>> from serializers import PickleSerializer
+        >>> graph = GraphDB(InMemoryKVStore(), PickleSerializer())
+        >>> graph.put_node(Node("a", labels=["Person"]))
+        <graphdb.Node object at ...>
+        >>> graph.find_nodes(labels=["Person"])[0].get_id
+        'a'
+    """
+
+    def __init__(self):
+        """Create an empty in-memory store."""
+        self.nodes = {}
+        self.edges = {}
+        self.adjacency = {}
+        self.node_labels = {}
+        self.node_properties = {}
+        self.edge_types = {}
+        self.edge_properties = {}
+
+    def put(self, key: bytes, value: bytes):
+        """Store a raw key-value pair in the node namespace.
+
+        Args:
+            key: Bytes key.
+            value: Serialized value.
+        """
+        self.nodes[key] = value
+
+    def get(self, key: bytes) -> bytes:
+        """Fetch a raw key-value pair from the node namespace.
+
+        Args:
+            key: Bytes key.
+
+        Returns:
+            Serialized value or ``None`` if missing.
+        """
+        return self.nodes.get(key)
+
+    def delete(self, key: bytes):
+        """Delete a raw key-value pair from the node namespace.
+
+        Args:
+            key: Bytes key to delete.
+        """
+        self.nodes.pop(key, None)
+
+    def range_iter(self, start_key: bytes, end_key: bytes):
+        """Iterate raw node-namespace keys in an inclusive byte range.
+
+        Args:
+            start_key: Inclusive lower bound.
+            end_key: Inclusive upper bound.
+
+        Yields:
+            ``(key, value)`` pairs in sorted key order.
+        """
+        for key in sorted(self.nodes):
+            if start_key <= key <= end_key:
+                yield key, self.nodes[key]
+
+    def close(self):
+        """Close the store.
+
+        The in-memory backend has no external resources, so this is a no-op.
+        """
+        pass
+
+    def put_node(self, node_id: bytes, value: bytes):
+        """Store a serialized node record.
+
+        Args:
+            node_id: Node key.
+            value: Serialized node value.
+        """
+        self.nodes[node_id] = value
+
+    def get_node(self, node_id: bytes) -> bytes:
+        """Fetch a serialized node record.
+
+        Args:
+            node_id: Node key.
+
+        Returns:
+            Serialized node value or ``None`` if missing.
+        """
+        return self.nodes.get(node_id)
+
+    def delete_node(self, node_id: bytes):
+        """Delete a node record.
+
+        Args:
+            node_id: Node key.
+        """
+        self.nodes.pop(node_id, None)
+
+    def put_edge(self, edge_id: bytes, value: bytes):
+        """Store a serialized edge record.
+
+        Args:
+            edge_id: Edge key.
+            value: Serialized edge value.
+        """
+        self.edges[edge_id] = value
+
+    def get_edge(self, edge_id: bytes) -> bytes:
+        """Fetch a serialized edge record.
+
+        Args:
+            edge_id: Edge key.
+
+        Returns:
+            Serialized edge value or ``None`` if missing.
+        """
+        return self.edges.get(edge_id)
+
+    def delete_edge(self, edge_id: bytes):
+        """Delete an edge record.
+
+        Args:
+            edge_id: Edge key.
+        """
+        self.edges.pop(edge_id, None)
+
+    def put_nodes_bulk(self, keys_and_values: dict[bytes, bytes]):
+        """Store multiple serialized node records.
+
+        Args:
+            keys_and_values: Mapping of node keys to serialized node values.
+        """
+        self.nodes.update(keys_and_values)
+
+    def get_nodes_bulk(self, node_ids: list[bytes]) -> dict[bytes, bytes]:
+        """Fetch multiple serialized node records.
+
+        Args:
+            node_ids: Node keys to fetch.
+
+        Returns:
+            Mapping for IDs that exist. Missing IDs are omitted.
+        """
+        return {node_id: self.nodes[node_id] for node_id in node_ids if node_id in self.nodes}
+
+    def put_edges_bulk(self, keys_and_values: dict[bytes, bytes]):
+        """Store multiple serialized edge records.
+
+        Args:
+            keys_and_values: Mapping of edge keys to serialized edge values.
+        """
+        self.edges.update(keys_and_values)
+
+    def get_edges_bulk(self, edge_ids: list[bytes]) -> dict[bytes, bytes]:
+        """Fetch multiple serialized edge records.
+
+        Args:
+            edge_ids: Edge keys to fetch.
+
+        Returns:
+            Mapping for IDs that exist. Missing IDs are omitted.
+        """
+        return {edge_id: self.edges[edge_id] for edge_id in edge_ids if edge_id in self.edges}
+
+    def put_adjacency(self, node_id: bytes, value: bytes) -> None:
+        """Store a serialized adjacency record for a node.
+
+        Args:
+            node_id: Node key.
+            value: Serialized adjacency value.
+        """
+        self.adjacency[node_id] = value
+
+    def get_adjacency(self, node_id: bytes) -> Optional[bytes]:
+        """Fetch a serialized adjacency record.
+
+        Args:
+            node_id: Node key.
+
+        Returns:
+            Serialized adjacency value or ``None`` if missing.
+        """
+        return self.adjacency.get(node_id)
+
+    def put_adjacency_bulk(self, adj_dict: Dict[bytes, bytes]) -> None:
+        """Store multiple serialized adjacency records.
+
+        Args:
+            adj_dict: Mapping of node keys to serialized adjacency values.
+        """
+        self.adjacency.update(adj_dict)
+
+    def get_adjacency_bulk(self, node_ids: List[bytes]) -> Dict[bytes, bytes]:
+        """Fetch multiple serialized adjacency records.
+
+        Args:
+            node_ids: Node keys to fetch.
+
+        Returns:
+            Mapping for IDs that exist. Missing IDs are omitted.
+        """
+        return {node_id: self.adjacency[node_id] for node_id in node_ids if node_id in self.adjacency}
+
+    def get_node_keys_generator(self, num_nodes=None, key_offset=None):
+        """Yield node keys in sorted order.
+
+        Args:
+            num_nodes: Optional maximum number of keys to yield.
+            key_offset: Optional inclusive starting key.
+
+        Yields:
+            Node keys as bytes.
+        """
+        yielded = 0
+        for key in sorted(self.nodes):
+            if key_offset is not None and key < key_offset:
+                continue
+            yield key
+            yielded += 1
+            if num_nodes is not None and yielded == num_nodes:
+                break
+
+    def get_edge_keys_generator(self, num_edges=None, key_offset=None):
+        """Yield edge keys in sorted order.
+
+        Args:
+            num_edges: Optional maximum number of keys to yield.
+            key_offset: Optional inclusive starting key.
+
+        Yields:
+            Edge keys as bytes.
+        """
+        yielded = 0
+        for key in sorted(self.edges):
+            if key_offset is not None and key < key_offset:
+                continue
+            yield key
+            yielded += 1
+            if num_edges is not None and yielded == num_edges:
+                break
+
+    def index_node(self, node, old_node=None):
+        """Add a node to label/property indexes.
+
+        Args:
+            node: Node to index.
+            old_node: Previous version of the same node, if this is an upsert.
+                It is removed from indexes before the new version is added.
+        """
+        if old_node is not None:
+            self.unindex_node(old_node)
+        node_id = node.get_id
+        for label in node.labels:
+            self.node_labels.setdefault(label, set()).add(node_id)
+        for key, value in node.properties.items():
+            try:
+                self.node_properties.setdefault((key, value), set()).add(node_id)
+            except TypeError:
+                continue
+
+    def unindex_node(self, node):
+        """Remove a node from label/property indexes.
+
+        Args:
+            node: Node to remove from indexes.
+        """
+        node_id = node.get_id
+        for label in node.labels:
+            ids = self.node_labels.get(label)
+            if ids is not None:
+                ids.discard(node_id)
+                if not ids:
+                    self.node_labels.pop(label, None)
+        for key, value in node.properties.items():
+            try:
+                ids = self.node_properties.get((key, value))
+            except TypeError:
+                continue
+            if ids is not None:
+                ids.discard(node_id)
+                if not ids:
+                    self.node_properties.pop((key, value), None)
+
+    def node_candidates(self, labels=None, properties=None):
+        """Return candidate node IDs for exact label/property filters.
+
+        Args:
+            labels: Labels that candidate nodes must contain.
+            properties: Exact property matches for candidate nodes.
+
+        Returns:
+            Sorted node IDs when at least one usable indexed filter exists.
+            ``None`` means the caller should fall back to a full scan.
+        """
+        sets = []
+        for label in labels or []:
+            sets.append(set(self.node_labels.get(label, set())))
+        for key, value in (properties or {}).items():
+            try:
+                sets.append(set(self.node_properties.get((key, value), set())))
+            except TypeError:
+                return None
+        if not sets:
+            return None
+        return sorted(set.intersection(*sets))
+
+    def index_edge(self, edge, old_edge=None):
+        """Add an edge to type/property indexes.
+
+        Args:
+            edge: Edge to index.
+            old_edge: Previous version of the same edge, if this is an upsert.
+                It is removed from indexes before the new version is added.
+        """
+        if old_edge is not None:
+            self.unindex_edge(old_edge)
+        edge_id = edge.get_id
+        if edge.type is not None:
+            self.edge_types.setdefault(edge.type, set()).add(edge_id)
+        for key, value in edge.properties.items():
+            try:
+                self.edge_properties.setdefault((key, value), set()).add(edge_id)
+            except TypeError:
+                continue
+
+    def unindex_edge(self, edge):
+        """Remove an edge from type/property indexes.
+
+        Args:
+            edge: Edge to remove from indexes.
+        """
+        edge_id = edge.get_id
+        if edge.type is not None:
+            ids = self.edge_types.get(edge.type)
+            if ids is not None:
+                ids.discard(edge_id)
+                if not ids:
+                    self.edge_types.pop(edge.type, None)
+        for key, value in edge.properties.items():
+            try:
+                ids = self.edge_properties.get((key, value))
+            except TypeError:
+                continue
+            if ids is not None:
+                ids.discard(edge_id)
+                if not ids:
+                    self.edge_properties.pop((key, value), None)
+
+    def edge_candidates(self, type=None, properties=None):
+        """Return candidate edge IDs for exact type/property filters.
+
+        Args:
+            type: Required edge type, or ``None``.
+            properties: Exact property matches for candidate edges.
+
+        Returns:
+            Sorted edge IDs when at least one usable indexed filter exists.
+            ``None`` means the caller should fall back to a full scan.
+        """
+        sets = []
+        if type is not None:
+            sets.append(set(self.edge_types.get(type, set())))
+        for key, value in (properties or {}).items():
+            try:
+                sets.append(set(self.edge_properties.get((key, value), set())))
+            except TypeError:
+                return None
+        if not sets:
+            return None
+        return sorted(set.intersection(*sets))
+
 # =========================================
 # LMDB Implementation
 # =========================================
@@ -116,6 +520,11 @@ class SimpleKV:
 
 class LMDBStore(KVStore):
     def __init__(self, path='graph_lmdb', map_size=10_485_760, map_id = True, map_keys = False):
+        try:
+            import lmdb
+        except ModuleNotFoundError as exc:
+            raise ModuleNotFoundError("LMDBStore requires the 'lmdb' extra: uv sync --extra lmdb") from exc
+
         """
         Creates/opens an LMDB environment with three named sub-databases:
           - b'nodes' for node data
@@ -124,7 +533,7 @@ class LMDBStore(KVStore):
         """
         max_dbs = 3
         if map_keys:
-            map_dbs += 2
+            max_dbs += 2
         self.env = lmdb.open(path, map_size=map_size, subdir=True, max_dbs=max_dbs)
         self.nodes_db = self.env.open_db(b'nodes')
         self.edges_db = self.env.open_db(b'edges')
@@ -234,6 +643,18 @@ class LMDBStore(KVStore):
                     if num_nodes is not None and yielded == num_nodes:
                         break
 
+    def get_edge_keys_generator(self, num_edges = None, key_offset = None):
+        yielded = 0
+        with self.env.begin(write = False, db = self.edges_db) as txn:
+            with txn.cursor() as c:
+                if key_offset is not None:
+                    c.set_range(key_offset)
+                for k, _ in c:
+                    yield k
+                    yielded += 1
+                    if num_edges is not None and yielded == num_edges:
+                        break
+
     # ----- Adjacency Methods -----
     def put_adjacency(self, node_id: bytes, value: bytes) -> None:
         with self.env.begin(write=True, db=self.adj_db) as txn:
@@ -281,6 +702,11 @@ class LMDBStore(KVStore):
 
 class LevelDBStore(KVStore):
     def __init__(self, path='graph_leveldb'):
+        try:
+            import plyvel
+        except ModuleNotFoundError as exc:
+            raise ModuleNotFoundError("LevelDBStore requires the 'leveldb' extra: uv sync --extra leveldb") from exc
+
         """Create or open a LevelDB store. We'll store nodes/edges by prefix."""
         
         self.db_paths = {'nodes' : os.path.join('nodes'), 'edges': os.path.join('edges'), 'adjacency' : os.path.join('adjacency')}
@@ -306,7 +732,7 @@ class LevelDBStore(KVStore):
         return self.db_paths[db_string]
     
     def range_iter(self, start_key: bytes, end_key: bytes):
-        with self.db.iterator(start=start_key, stop=end_key) as it:
+        with self.db_nodes.iterator(start=start_key, stop=end_key) as it:
             for k, v in it:
                 yield k, v
 
@@ -317,6 +743,24 @@ class LevelDBStore(KVStore):
 
     def get_node_keys_iterator(self):
         return self.get_db_iterator(which_db='nodes')
+
+    def get_node_keys_generator(self, num_nodes = None, key_offset = None):
+        yielded = 0
+        with self.db_nodes.iterator(start=key_offset) as it:
+            for k, _ in it:
+                yield k
+                yielded += 1
+                if num_nodes is not None and yielded == num_nodes:
+                    break
+
+    def get_edge_keys_generator(self, num_edges = None, key_offset = None):
+        yielded = 0
+        with self.db_edges.iterator(start=key_offset) as it:
+            for k, _ in it:
+                yield k
+                yielded += 1
+                if num_edges is not None and yielded == num_edges:
+                    break
 
 
     # -- Specialized methods for nodes

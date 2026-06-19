@@ -1,222 +1,163 @@
+import unittest
+
+from graphdb import ConstraintError, Edge, Node, NodeNotFoundError, GraphDB
+from kvstores import InMemoryKVStore
+from serializers import PickleSerializer
 
 
-import sys
-sys.path.append('./src')
-from kvstores import LevelDBStore, LMDBStore
-from serializers import PickleSerializer, JSONSerializer
-from graphdb import GraphDB, Node, Edge
+class FailingOnceAdjacencyStore(InMemoryKVStore):
+    def __init__(self):
+        super().__init__()
+        self.fail_next_adjacency_write = False
 
-import shutil
-import tempfile
-import unittest 
-import abc
+    def put_adjacency(self, node_id: bytes, value: bytes) -> None:
+        if self.fail_next_adjacency_write:
+            self.fail_next_adjacency_write = False
+            raise RuntimeError("injected adjacency failure")
+        super().put_adjacency(node_id, value)
 
-class AbstractGraphDBBase(unittest.TestCase):
-    """
-    Base test case for GraphDB. Subclasses implement get_store() to return either an LMDB or LevelDB store.
-    This ensures we run the same tests for both backends.
-    """
 
-    def get_store(self, path: str):
-        """Should return an instance of the KVStore (LMDBStore or LevelDBStore)."""
-        return LMDBStore(path=path)
-
+class GraphDBTest(unittest.TestCase):
     def setUp(self):
-        self.test_dir = tempfile.mkdtemp(prefix="graphdb_test_")
-        self.serializer = PickleSerializer()  # or JSONSerializer()
-        self.store = self.get_store(self.test_dir)
-        self.graph_db = GraphDB(self.store, self.serializer)
+        self.graph = GraphDB(InMemoryKVStore(), PickleSerializer())
 
-    def tearDown(self):
-        # Close the DB.
-        self.graph_db.close()
-        # Remove temp directory.
-        shutil.rmtree(self.test_dir, ignore_errors=True)
+    def test_nodes_round_trip_with_labels_and_properties(self):
+        self.graph.put_node(Node("a", labels=["Person"], properties={"name": "Alice", "age": 30}))
 
-    def test_single_node(self):
-        # 1. Create a node
-        node_a = Node(properties={"name": "Alice", "age": 30})
-        self.graph_db.put_node(node_a)
+        node = self.graph.get_node("a")
 
-        # 2. Retrieve the node
-        fetched = self.graph_db.get_node(node_a.get_id_bytes)
-        self.assertIsNotNone(fetched)
-        self.assertEqual(fetched.properties["name"], "Alice")
-        self.assertEqual(fetched.properties["age"], 30)
+        self.assertEqual(node.get_id, "a")
+        self.assertEqual(node.labels, frozenset({"Person"}))
+        self.assertEqual(node.properties, {"name": "Alice", "age": 30})
 
-        # 3. Delete the node
-        self.graph_db.delete_node(node_a.get_id_bytes)
-        deleted = self.graph_db.get_node(node_a.get_id_bytes)
-        self.assertIsNone(deleted)
+    def test_edge_requires_existing_endpoints(self):
+        self.graph.put_node(Node("a"))
 
-    def test_single_edge(self):
-        # Create two nodes
-        node_a = Node(properties={"name": "Alice"})
-        node_b = Node(properties={"name": "Bob"})
-        self.graph_db.put_node(node_a)
-        self.graph_db.put_node(node_b)
+        with self.assertRaises(NodeNotFoundError):
+            self.graph.put_edge(Edge("e1", source="a", target="missing", type="KNOWS"))
 
-        # Create an edge between them
-        edge_ab = Edge(source=node_a.get_id, target=node_b.get_id, properties={"relation": "friend"})
-        self.graph_db.put_edge(edge_ab)
+    def test_put_edge_maintains_directional_adjacency(self):
+        self.graph.put_node(Node("a"))
+        self.graph.put_node(Node("b"))
+        self.graph.put_edge(Edge("e1", source="a", target="b", type="KNOWS"))
 
-        # Retrieve the edge
-        fetched_edge = self.graph_db.get_edge(edge_ab.get_id_bytes)
-        self.assertIsNotNone(fetched_edge)
-        self.assertEqual(fetched_edge.properties["relation"], "friend")
-        self.assertEqual(fetched_edge.source, node_a.get_id)
-        self.assertEqual(fetched_edge.target, node_b.get_id)
+        self.assertEqual(self.graph.get_adjacency_list("a", "out"), ["e1"])
+        self.assertEqual(self.graph.get_adjacency_list("a", "in"), [])
+        self.assertEqual(self.graph.get_adjacency_list("b", "in"), ["e1"])
+        self.assertEqual(self.graph.neighbors("a", "out"), ["b"])
+        self.assertEqual(self.graph.neighbors("b", "in"), ["a"])
 
-        # Delete the edge
-        self.graph_db.delete_edge(edge_ab.get_id_bytes)
-        deleted_edge = self.graph_db.get_edge(edge_ab.get_id_bytes)
-        self.assertIsNone(deleted_edge)
+    def test_edge_upsert_is_idempotent_and_moves_adjacency(self):
+        for node_id in ["a", "b", "c"]:
+            self.graph.put_node(Node(node_id))
 
-    def test_bfs_simple(self):
-        """
-        Verify BFS works with adjacency-based graph structure.
-        We'll create a small triangle graph: A-B, B-C, A-C
-        BFS from A should visit A, B, C (in BFS order).
-        """
-        node_a = Node(properties={"label": "A"})
-        node_b = Node(properties={"label": "B"})
-        node_c = Node(properties={"label": "C"})
+        self.graph.put_edge(Edge("e1", source="a", target="b"))
+        self.graph.put_edge(Edge("e1", source="a", target="b"))
+        self.graph.put_edge(Edge("e1", source="a", target="c"))
 
-        self.graph_db.put_node(node_a)
-        self.graph_db.put_node(node_b)
-        self.graph_db.put_node(node_c)
+        self.assertEqual(self.graph.get_adjacency_list("a", "out"), ["e1"])
+        self.assertEqual(self.graph.get_adjacency_list("b", "in"), [])
+        self.assertEqual(self.graph.get_adjacency_list("c", "in"), ["e1"])
 
-        # Edges
-        edge_ab = Edge(source=node_a.get_id, target=node_b.get_id)
-        edge_bc = Edge(source=node_b.get_id, target=node_c.get_id)
-        edge_ac = Edge(source=node_a.get_id, target=node_c.get_id)
+    def test_delete_edge_cleans_adjacency(self):
+        self.graph.put_node(Node("a"))
+        self.graph.put_node(Node("b"))
+        self.graph.put_edge(Edge("e1", source="a", target="b"))
 
-        self.graph_db.put_edge(edge_ab)
-        self.graph_db.put_edge(edge_bc)
-        self.graph_db.put_edge(edge_ac)
+        self.graph.delete_edge("e1")
 
-        # BFS from A
-        bfs_result = self.graph_db.bfs(node_a.get_id_bytes)
-        # BFS typically visits in the order [A, B, C], but the exact order can vary
-        # We'll check that BFS visited all 3 exactly once.
-        self.assertEqual(set(bfs_result), {node_a.get_id_bytes, node_b.get_id_bytes, node_c.get_id_bytes})
-        self.assertEqual(len(bfs_result), 3, "BFS should visit exactly 3 nodes")
+        self.assertIsNone(self.graph.get_edge("e1"))
+        self.assertEqual(self.graph.get_adjacency_list("a", "out"), [])
+        self.assertEqual(self.graph.get_adjacency_list("b", "in"), [])
 
+    def test_delete_node_restrict_and_detach(self):
+        self.graph.put_node(Node("a"))
+        self.graph.put_node(Node("b"))
+        self.graph.put_edge(Edge("e1", source="a", target="b"))
 
-    def test_bulk_nodes(self):
-        """Example test for multi-node put/get if your GraphDB supports it."""
-        # Suppose we define a hypothetical put_nodes() and get_nodes() in GraphDB.
-        # If you haven't implemented these, consider them placeholders.
+        with self.assertRaises(ConstraintError):
+            self.graph.delete_node("a")
 
-        # Create multiple nodes
-        nodes = [Node(properties={"name": f"User{i}"}) for i in range(5)]
+        self.graph.delete_node("a", mode="detach")
 
-        # We'll store them individually in this example, but you might have a real put_nodes method.
-        for n in nodes:
-            self.graph_db.put_node(n)
+        self.assertIsNone(self.graph.get_node("a"))
+        self.assertIsNone(self.graph.get_edge("e1"))
+        self.assertEqual(self.graph.get_adjacency_list("b", "in"), [])
 
-        # Bulk retrieval (if your GraphDB has get_nodes):
-        # If not, we just do a loop.
-        retrieved = self.graph_db.get_nodes([n.get_id_bytes for n in nodes])
-        # retrieved = [self.graph_db.get_node(n.get_id_bytes) for n in nodes]
+    def test_bfs_uses_deque_and_respects_direction(self):
+        for node_id in ["a", "b", "c"]:
+            self.graph.put_node(Node(node_id))
+        self.graph.put_edge(Edge("ab", source="a", target="b"))
+        self.graph.put_edge(Edge("bc", source="b", target="c"))
 
-        # Check the results
-        for i, r in enumerate(retrieved):
-            self.assertIsNotNone(r)
-            self.assertEqual(r.properties["name"], f"User{i}")
+        self.assertEqual(self.graph.bfs("a", direction="out"), ["a", "b", "c"])
+        self.assertEqual(self.graph.bfs("c", direction="out"), ["c"])
+        self.assertEqual(self.graph.bfs("c", direction="in"), ["c", "b", "a"])
 
-        # Cleanup
-        for n in nodes:
-            self.graph_db.delete_node(n.get_id_bytes)
-        for n in nodes:
-            self.assertIsNone(self.graph_db.get_node(n.get_id_bytes))
+    def test_property_graph_lookup_api(self):
+        self.graph.put_node(Node("a", labels=["Person"], properties={"name": "Alice", "age": 30}))
+        self.graph.put_node(Node("b", labels=["Person", "Employee"], properties={"name": "Bob", "age": 40}))
+        self.graph.put_node(Node("c", labels=["Company"], properties={"name": "Acme"}))
+        self.graph.put_edge(Edge("e1", source="a", target="b", type="KNOWS", properties={"since": 2020}))
+        self.graph.put_edge(Edge("e2", source="b", target="c", type="WORKS_AT", properties={"role": "Engineer"}))
 
-    def test_bulk_edges(self):
-        """Example test for multi-edge put/get if your GraphDB supports it."""
-        # Create some nodes
-        node_a = Node(properties={"label": "A"})
-        node_b = Node(properties={"label": "B"})
-        node_c = Node(properties={"label": "C"})
-        self.graph_db.put_node(node_a)
-        self.graph_db.put_node(node_b)
-        self.graph_db.put_node(node_c)
+        self.assertEqual([n.get_id for n in self.graph.find_nodes(labels=["Person"])], ["a", "b"])
+        self.assertEqual([n.get_id for n in self.graph.find_nodes(labels=["Employee"])], ["b"])
+        self.assertEqual([n.get_id for n in self.graph.find_nodes(properties={"name": "Acme"})], ["c"])
+        self.assertEqual([n.get_id for n in self.graph.find_nodes(predicate=lambda n: n.properties.get("age", 0) >= 35)], ["b"])
+        self.assertEqual([e.get_id for e in self.graph.find_edges(type="KNOWS")], ["e1"])
+        self.assertEqual([e.get_id for e in self.graph.find_edges(source="b")], ["e2"])
+        self.assertEqual([e.get_id for e in self.graph.find_edges(properties={"role": "Engineer"})], ["e2"])
 
-        edges = [
-            Edge(source=node_a.get_id, target=node_b.get_id, properties={"weight": 1}),
-            Edge(source=node_b.get_id, target=node_c.get_id, properties={"weight": 2}),
-            Edge(source=node_a.get_id, target=node_c.get_id, properties={"weight": 3})
-        ]
+    def test_bulk_gets_preserve_order_and_missing_values(self):
+        self.graph.put_nodes([Node("a"), Node("b")])
 
-        for e in edges:
-            self.graph_db.put_edge(e)
+        nodes = self.graph.get_nodes(["b", "missing", "a"])
 
-        # Hypothetical get_edges method
-        fetched_edges = [self.graph_db.get_edge(e.get_id_bytes) for e in edges]
-        for i, e in enumerate(fetched_edges):
-            self.assertIsNotNone(e)
-            self.assertIn("weight", e.properties)
+        self.assertEqual([node.get_id if node else None for node in nodes], ["b", None, "a"])
 
-        # Cleanup
-        for e in edges:
-            self.graph_db.delete_edge(e.get_id_bytes)
-        for e in edges:
-            self.assertIsNone(self.graph_db.get_edge(e.get_id_bytes))
+    def test_indexes_are_updated_on_upsert_and_delete(self):
+        self.graph.put_node(Node("a", labels=["Person"], properties={"name": "Alice"}))
+        self.graph.put_node(Node("a", labels=["Company"], properties={"name": "Acme"}))
 
-    def test_put_edges_bulk(self):
-        """
-        Verify bulk insertion of multiple edges, with adjacency updates in one pass.
-        We'll create 3 nodes, then 3 edges in bulk, then check adjacency and BFS.
-        """
-        # Create 3 nodes
-        node_a = Node(properties={"label": "A"})
-        node_b = Node(properties={"label": "B"})
-        node_c = Node(properties={"label": "C"})
-        self.graph_db.put_node(node_a)
-        self.graph_db.put_node(node_b)
-        self.graph_db.put_node(node_c)
+        self.assertEqual(self.graph.find_nodes(labels=["Person"]), [])
+        self.assertEqual([n.get_id for n in self.graph.find_nodes(labels=["Company"])], ["a"])
+        self.assertEqual(self.graph.find_nodes(properties={"name": "Alice"}), [])
+        self.assertEqual([n.get_id for n in self.graph.find_nodes(properties={"name": "Acme"})], ["a"])
 
-        # Suppose we have a 'put_edges_bulk' in GraphDB
-        if not hasattr(self.graph_db, "put_edges_bulk"):
-            self.skipTest("GraphDB does not implement put_edges_bulk")
+        self.graph.delete_node("a")
 
-        edge_ab = Edge(source=node_a.get_id, target=node_b.get_id, properties={"weight": 1})
-        edge_bc = Edge(source=node_b.get_id, target=node_c.get_id, properties={"weight": 2})
-        edge_ac = Edge(source=node_a.get_id, target=node_c.get_id, properties={"weight": 3})
+        self.assertEqual(self.graph.find_nodes(labels=["Company"]), [])
 
-        # Insert edges in one bulk call
-        self.graph_db.put_edges_bulk([edge_ab, edge_bc, edge_ac])
+    def test_edge_indexes_are_updated_on_upsert_and_delete(self):
+        for node_id in ["a", "b"]:
+            self.graph.put_node(Node(node_id))
+        self.graph.put_edge(Edge("e1", source="a", target="b", type="KNOWS", properties={"since": 2020}))
+        self.graph.put_edge(Edge("e1", source="a", target="b", type="LIKES", properties={"since": 2021}))
 
-        # Check adjacency
-        adj_a = set(self.graph_db.get_adjacency_list(node_a.get_id_bytes,direction = 'any'))
-        adj_b = set(self.graph_db.get_adjacency_list(node_b.get_id_bytes, direction = 'any'))
-        adj_c = set(self.graph_db.get_adjacency_list(node_c.get_id_bytes, direction = 'any'))
+        self.assertEqual(self.graph.find_edges(type="KNOWS"), [])
+        self.assertEqual([e.get_id for e in self.graph.find_edges(type="LIKES")], ["e1"])
+        self.assertEqual(self.graph.find_edges(properties={"since": 2020}), [])
+        self.assertEqual([e.get_id for e in self.graph.find_edges(properties={"since": 2021})], ["e1"])
 
-        # Each node is connected to the 2 edges that link it
-        self.assertIn(edge_ab.get_id_bytes, adj_a)
-        self.assertIn(edge_ac.get_id_bytes, adj_a)
-        self.assertIn(edge_ab.get_id_bytes, adj_b)
-        self.assertIn(edge_bc.get_id_bytes, adj_b)
-        self.assertIn(edge_bc.get_id_bytes, adj_c)
-        self.assertIn(edge_ac.get_id_bytes, adj_c)
+        self.graph.delete_edge("e1")
 
-        # BFS from A
-        # bfs_result = self.graph_db.bfs(node_a.get_id_bytes)
-        # print(bfs_result)
-        # self.assertEqual(set(bfs_result), {node_a.get_id_bytes, node_b.get_id_bytes, node_c.get_id_bytes})
-        # self.assertEqual(len(bfs_result), 3, "BFS should visit exactly 3 nodes")
+        self.assertEqual(self.graph.find_edges(type="LIKES"), [])
 
-class TestGraphDBWithLMDB(AbstractGraphDBBase):
-    def get_store(self, path: str):
-        # Return LMDBStore pointing to a temporary directory.
-        return LMDBStore(path=path)
+    def test_failed_edge_write_rolls_back_partial_state(self):
+        store = FailingOnceAdjacencyStore()
+        graph = GraphDB(store, PickleSerializer())
+        graph.put_node(Node("a"))
+        graph.put_node(Node("b"))
+        store.fail_next_adjacency_write = True
 
+        with self.assertRaises(RuntimeError):
+            graph.put_edge(Edge("e1", source="a", target="b"))
 
-class TestGraphDBWithLevelDB(AbstractGraphDBBase):
-    def get_store(self, path: str):
-        # Return LevelDBStore pointing to a temporary directory.
-        return LevelDBStore(path=path)
+        self.assertIsNone(graph.get_edge("e1"))
+        self.assertEqual(graph.get_adjacency_list("a", "out"), [])
+        self.assertEqual(graph.get_adjacency_list("b", "in"), [])
 
 
 if __name__ == "__main__":
     unittest.main()
-
