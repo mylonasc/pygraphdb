@@ -7,6 +7,12 @@ _TYPED_ADJ_SEP = b"\x1f"
 
 
 def _missing_dependency_error(package_name, install_name=None, feature_name=None):
+    """Build a consistent optional dependency error.
+
+    Examples:
+        >>> "lmdb" in str(_missing_dependency_error("lmdb"))
+        True
+    """
     install_name = install_name or package_name
     feature_name = feature_name or package_name
     return ImportError(
@@ -16,18 +22,42 @@ def _missing_dependency_error(package_name, install_name=None, feature_name=None
 
 
 def _pack_long_int(int_val):
+    """Pack an integer as little-endian unsigned long bytes.
+
+    Examples:
+        >>> _unpack_long_int(_pack_long_int(3))
+        3
+    """
     return struct.pack('<L', int_val)
 
 def _unpack_long_int(int_val):
+    """Unpack little-endian unsigned long bytes.
+
+    Examples:
+        >>> _unpack_long_int(_pack_long_int(3))
+        3
+    """
     return struct.unpack('<L', int_val)[0]
 
 
 def _typed_adjacency_key(direction: str, node_id: bytes, edge_type: str, edge_id: bytes = b"") -> bytes:
+    """Build a typed adjacency key.
+
+    Examples:
+        >>> _typed_adjacency_key("out", b"drug-1", "drug-to-protein", b"e1")
+        b'out\\x1fdrug-1\\x1fdrug-to-protein\\x1fe1'
+    """
     edge_type_bytes = edge_type.encode("utf-8")
     return _TYPED_ADJ_SEP.join([direction.encode("utf-8"), node_id, edge_type_bytes, edge_id])
 
 
 def _typed_adjacency_prefix(direction: str, node_id: bytes, edge_type: str) -> bytes:
+    """Build the key prefix for a typed adjacency scan.
+
+    Examples:
+        >>> _typed_adjacency_prefix("out", b"drug-1", "drug-to-protein").startswith(b"out")
+        True
+    """
     return _typed_adjacency_key(direction, node_id, edge_type)
 
 
@@ -36,12 +66,15 @@ class KVStore:
 
     # The basic K/V methods:
     def put(self, key: bytes, value: bytes):
+        """Store a raw key/value pair."""
         raise NotImplementedError
 
     def get(self, key: bytes) -> bytes:
+        """Return a raw value by key."""
         raise NotImplementedError
 
     def delete(self, key: bytes):
+        """Delete a raw key/value pair."""
         raise NotImplementedError
 
     def range_iter(self, start_key: bytes, end_key: bytes):
@@ -49,6 +82,7 @@ class KVStore:
         raise NotImplementedError
 
     def close(self):
+        """Close any resources owned by the store."""
         raise NotImplementedError
 
     # The specialized node/edge methods:
@@ -83,45 +117,62 @@ class KVStore:
         raise NotImplementedError
 
     def get_nodes_bulk(self, node_ids: list[str]) -> dict[str, bytes]:
+        """Retrieve multiple serialized nodes by key."""
         raise NotImplementedError
 
     def put_edges_bulk(self, keys_and_values: dict[str, bytes]):
+        """Store multiple serialized edges."""
         raise NotImplementedError
     
     def get_edges_bulk(self, edge_ids: list[str]) -> dict[str, bytes]:
+        """Retrieve multiple serialized edges by key."""
         raise NotImplementedError
 
     def put_typed_adjacency(self, source_id: bytes, target_id: bytes, edge_type: str, edge_id: bytes):
+        """Store typed adjacency records for an edge."""
         raise NotImplementedError
 
     def delete_typed_adjacency(self, source_id: bytes, target_id: bytes, edge_type: str, edge_id: bytes):
+        """Delete typed adjacency records for an edge."""
         raise NotImplementedError
 
     def iter_typed_adjacency(self, node_id: bytes, edge_type: str, direction: str = "out"):
+        """Yield typed adjacency records for a node and edge type."""
         raise NotImplementedError
 
 # =========================================
 # LMDB Implementation
 # =========================================
 class SimpleKV:
+    """Small LMDB-backed helper for metadata key/value access.
+
+    Args:
+        db_path: LMDB database handle or name used by transactions.
+    """
+
     def __init__(self, db_path):
+        """Initialize the helper with an LMDB database path or handle."""
         self.db_path = db_path
         self.max_key_idx = None
         
     def get_num_keys(self):
+        """Return the stored key counter."""
         _b = self.get('num_keys'.encode('utf-8'))
         num_keys = struct.unpack('<L',_b)
         return num_keys
     
     def put_num_keys(self, num_keys):
+        """Store the key counter."""
         num_keys_bytes = struct.pack('<L',num_keys)
         _b = self.put('num_keys'.encode('utf-8'), num_keys_bytes)
 
     def put(self, key : bytes, value : bytes):
+        """Write a metadata key/value pair."""
         with self.env.begin(write=True, db=self.db_path) as txn:
             txn.put(key, value)
 
     def get(self, key):
+        """Read a metadata value by key."""
         with self.env.begin(write=False, db=self.db_path) as txn:
             return txn.get(key)
     
@@ -138,11 +189,18 @@ class SimpleKV:
             return num_keys
         
     def decode_db_key(self, key):
+        """Return the encoded database key for a user key."""
         v = self.get(key.encode('utf-8'))
         return v
         
 
 class LMDBStore(KVStore):
+    """LMDB implementation of the PyGraphDB key-value store.
+
+    Examples:
+        >>> store = LMDBStore(path="/tmp/example_graph_lmdb")  # doctest: +SKIP
+    """
+
     def __init__(self, path='graph_lmdb', map_size=10_485_760, map_id = True, map_keys = False):
         """
         Creates/opens an LMDB environment with three named sub-databases:
@@ -172,17 +230,21 @@ class LMDBStore(KVStore):
 
     # -- Basic methods (not used by GraphDB if we rely on specialized node/edge methods below)
     def put(self, key: bytes, value: bytes):
+        """Placeholder generic put; graph code uses specialized methods."""
         # For LMDB, we'd need to decide which db to put to. This might remain unused.
         pass
 
     def get(self, key: bytes) -> bytes:
+        """Placeholder generic get; graph code uses specialized methods."""
         # Not used directly.
         return None
 
     def delete(self, key: bytes):
+        """Placeholder generic delete; graph code uses specialized methods."""
         pass
 
     def range_iter(self, start_key: bytes, end_key: bytes):
+        """Yield node records whose keys fall within an inclusive range."""
         # For demonstration, let us assume node range queries share a single sub-DB.
         # This might need refining.
         with self.env.begin(write=False, db=self.nodes_db) as txn:
@@ -195,31 +257,38 @@ class LMDBStore(KVStore):
                 yield k, v
 
     def close(self):
+        """Close the LMDB environment."""
         self.env.close()
 
     # -- Specialized node methods
     def put_node(self, node_id: bytes, value: bytes):
+        """Store a serialized node by byte key."""
         with self.env.begin(write=True, db=self.nodes_db) as txn:
             txn.put(node_id, value)
 
     def get_node(self, node_id: bytes) -> bytes:
+        """Return serialized node bytes by key, or ``None``."""
         with self.env.begin(write=False, db=self.nodes_db) as txn:
             return txn.get(node_id)
 
     def delete_node(self, node_id: bytes):
+        """Delete a node by byte key."""
         with self.env.begin(write=True, db=self.nodes_db) as txn:
             txn.delete(node_id)
 
     # -- Specialized edge methods
     def put_edge(self, edge_id: bytes, value: bytes):
+        """Store a serialized edge by byte key."""
         with self.env.begin(write=True, db=self.edges_db) as txn:
             txn.put(edge_id, value)
 
     def get_edge(self, edge_id: str) -> bytes:
+        """Return serialized edge bytes by key, or ``None``."""
         with self.env.begin(write=False, db=self.edges_db) as txn:
             return txn.get(edge_id)
 
     def delete_edge(self, edge_id: str):
+        """Delete an edge by byte key."""
         with self.env.begin(write=True, db=self.edges_db) as txn:
             txn.delete(edge_id)
 
@@ -242,11 +311,13 @@ class LMDBStore(KVStore):
         return results
     
     def put_edges_bulk(self, keys_and_values: dict[bytes, bytes]):
+        """Store many serialized edges in one transaction."""
         with self.env.begin(write=True, db=self.edges_db) as txn:
             for edge_id, val in keys_and_values.items():
                 txn.put(edge_id, val)
     
     def get_edges_bulk(self, edge_ids: list[bytes]) -> dict[bytes, bytes]:
+        """Return serialized edges for the requested keys."""
         results = {}
         with self.env.begin(write=False, db=self.edges_db) as txn:
             for edge_id in edge_ids:
@@ -256,6 +327,7 @@ class LMDBStore(KVStore):
         return results
 
     def get_edge_keys_generator(self, num_edges = None, key_offset = None):
+        """Yield edge keys from the edge database."""
         yielded = 0
         with self.env.begin(write=False, db=self.edges_db) as txn:
             with txn.cursor() as c:
@@ -268,6 +340,7 @@ class LMDBStore(KVStore):
                         break
     
     def get_node_keys_generator(self, num_nodes = None, key_offset = None):
+        """Yield node keys from the node database."""
         yielded = 0
         with self.env.begin(write = False, db = self.nodes_db) as txn:
             with txn.cursor() as c:
@@ -281,10 +354,12 @@ class LMDBStore(KVStore):
 
     # ----- Adjacency Methods -----
     def put_adjacency(self, node_id: bytes, value: bytes) -> None:
+        """Store a serialized adjacency list for a node."""
         with self.env.begin(write=True, db=self.adj_db) as txn:
             txn.put(node_id, value)
 
     def get_adjacency(self, node_id: Union[bytes, str]) -> Optional[bytes]:
+        """Return a serialized adjacency list for a node."""
         with self.env.begin(write=False, db=self.adj_db) as txn:
             if isinstance(node_id, bytes):
                 return txn.get(node_id)
@@ -321,16 +396,19 @@ class LMDBStore(KVStore):
 
     # ----- Typed Adjacency Methods -----
     def put_typed_adjacency(self, source_id: bytes, target_id: bytes, edge_type: str, edge_id: bytes):
+        """Store forward and reverse typed adjacency records."""
         with self.env.begin(write=True, db=self.typed_adj_db) as txn:
             txn.put(_typed_adjacency_key("out", source_id, edge_type, edge_id), target_id)
             txn.put(_typed_adjacency_key("in", target_id, edge_type, edge_id), source_id)
 
     def delete_typed_adjacency(self, source_id: bytes, target_id: bytes, edge_type: str, edge_id: bytes):
+        """Delete forward and reverse typed adjacency records."""
         with self.env.begin(write=True, db=self.typed_adj_db) as txn:
             txn.delete(_typed_adjacency_key("out", source_id, edge_type, edge_id))
             txn.delete(_typed_adjacency_key("in", target_id, edge_type, edge_id))
 
     def iter_typed_adjacency(self, node_id: bytes, edge_type: str, direction: str = "out"):
+        """Yield typed adjacency ``(edge_id, neighbor_id)`` pairs."""
         prefix = _typed_adjacency_prefix(direction, node_id, edge_type)
         with self.env.begin(write=False, db=self.typed_adj_db) as txn:
             cursor = txn.cursor()
@@ -348,6 +426,15 @@ class LMDBStore(KVStore):
 # =========================================
 
 class LevelDBStore(KVStore):
+    """LevelDB implementation backed by ``plyvel``.
+
+    Args:
+        path: Directory that will contain the LevelDB sub-databases.
+
+    Examples:
+        >>> store = LevelDBStore(path="/tmp/example_graph_leveldb")  # doctest: +SKIP
+    """
+
     def __init__(self, path='graph_leveldb'):
         """Create or open a LevelDB store. We'll store nodes/edges by prefix."""
         try:
@@ -377,22 +464,36 @@ class LevelDBStore(KVStore):
     # def delete(self, key: bytes):
     #     self.db.delete(key)
     def get_db_path(self, db_string = 'nodes'):
+        """Return the relative path for a named LevelDB database.
+
+        Examples:
+            >>> LevelDBStore.get_db_path.__name__
+            'get_db_path'
+        """
         return self.db_paths[db_string]
     
     def range_iter(self, start_key: bytes, end_key: bytes):
+        """Yield records whose keys fall within a range.
+
+        Note:
+            This generic iterator is not used by the main graph APIs.
+        """
         with self.db.iterator(start=start_key, stop=end_key) as it:
             for k, v in it:
                 yield k, v
 
     def get_db_iterator(self, which_db = 'nodes'):
+        """Yield all records from a named sub-database."""
         with self.db_dict[which_db].iterator() as it:
             for k, v in it:
                 yield k, v
 
     def get_node_keys_iterator(self):
+        """Yield node database records."""
         return self.get_db_iterator(which_db='nodes')
 
     def get_node_keys_generator(self, num_nodes = None, key_offset = None):
+        """Yield node keys from the node database."""
         yielded = 0
         with self.db_nodes.iterator(start=key_offset) as it:
             for k, _ in it:
@@ -402,6 +503,7 @@ class LevelDBStore(KVStore):
                     break
 
     def get_edge_keys_generator(self, num_edges = None, key_offset = None):
+        """Yield edge keys from the edge database."""
         yielded = 0
         with self.db_edges.iterator(start=key_offset) as it:
             for k, _ in it:
@@ -413,22 +515,28 @@ class LevelDBStore(KVStore):
 
     # -- Specialized methods for nodes
     def put_node(self, node_id: bytes, value: bytes):
+        """Store a serialized node by byte key."""
         self.db_nodes.put(node_id,value)
 
     def get_node(self, node_id: bytes) -> bytes:
+        """Return serialized node bytes by key, or ``None``."""
         return self.db_nodes.get(node_id)
 
     def delete_node(self, node_id: bytes):
+        """Delete a node by byte key."""
         self.db_nodes.delete(node_id)
 
     # -- Specialized methods for edges
     def put_edge(self, edge_id: bytes, value: bytes):
+        """Store a serialized edge by byte key."""
         self.db_edges.put(edge_id, value)
 
     def get_edge(self, edge_id: bytes) -> bytes:
+        """Return serialized edge bytes by key, or ``None``."""
         return self.db_edges.get(edge_id)
 
     def delete_edge(self, edge_id: str):
+        """Delete an edge by byte key."""
         self.db_edges.delete(edge_id)
 
     def put_nodes_bulk(self, keys_and_values: dict[bytes, bytes]):
@@ -440,6 +548,7 @@ class LevelDBStore(KVStore):
                 wb.put(node_id, val)
 
     def get_nodes_bulk(self, node_ids: list[bytes]) -> dict[bytes, bytes]:
+        """Return serialized nodes for the requested keys."""
         results = {}
         for node_id in node_ids:
             data = self.db_nodes.get(node_id)
@@ -448,11 +557,13 @@ class LevelDBStore(KVStore):
         return results
     
     def put_edges_bulk(self, keys_and_values: dict[bytes, bytes]):
+        """Store many serialized edges in one write batch."""
         with self.db_edges.write_batch() as wb:
             for edge_id, val in keys_and_values.items():
                 wb.put(edge_id, val)
     
     def get_edges_bulk(self, edge_ids: list[bytes]) -> dict[bytes, bytes]:
+        """Return serialized edges for the requested keys."""
         results = {}
         for edge_id in edge_ids:
             # s = edge_id.decode()
@@ -465,9 +576,11 @@ class LevelDBStore(KVStore):
 
     # ----- Adjacency Methods -----
     def put_adjacency(self, node_id: bytes, value: bytes) -> None:
+        """Store a serialized adjacency list for a node."""
         self.db_adj.put(node_id, value)
 
     def get_adjacency(self, node_id: bytes) -> Optional[bytes]:
+        """Return a serialized adjacency list for a node."""
         return self.db_adj.get(node_id)
     
     # -------------------------------------------------------------------------
@@ -486,6 +599,7 @@ class LevelDBStore(KVStore):
     # Bulk Read: Adjacency
     # -------------------------------------------------------------------------
     def get_adjacency_bulk(self, node_ids: List[bytes]) -> Dict[bytes, bytes]:
+        """Return serialized adjacency lists for the requested nodes."""
         results = {}
         for node_id in node_ids:
             # s = node_id.decode()
@@ -497,16 +611,19 @@ class LevelDBStore(KVStore):
 
     # ----- Typed Adjacency Methods -----
     def put_typed_adjacency(self, source_id: bytes, target_id: bytes, edge_type: str, edge_id: bytes):
+        """Store forward and reverse typed adjacency records."""
         with self.db_typed_adj.write_batch() as wb:
             wb.put(_typed_adjacency_key("out", source_id, edge_type, edge_id), target_id)
             wb.put(_typed_adjacency_key("in", target_id, edge_type, edge_id), source_id)
 
     def delete_typed_adjacency(self, source_id: bytes, target_id: bytes, edge_type: str, edge_id: bytes):
+        """Delete forward and reverse typed adjacency records."""
         with self.db_typed_adj.write_batch() as wb:
             wb.delete(_typed_adjacency_key("out", source_id, edge_type, edge_id))
             wb.delete(_typed_adjacency_key("in", target_id, edge_type, edge_id))
 
     def iter_typed_adjacency(self, node_id: bytes, edge_type: str, direction: str = "out"):
+        """Yield typed adjacency ``(edge_id, neighbor_id)`` pairs."""
         prefix = _typed_adjacency_prefix(direction, node_id, edge_type)
         with self.db_typed_adj.iterator(prefix=prefix) as it:
             for key, neighbor_id in it:
@@ -514,6 +631,7 @@ class LevelDBStore(KVStore):
                 yield edge_id, neighbor_id
 
     def close(self):
+        """Close all LevelDB sub-databases."""
         self.db_typed_adj.close()
         self.db_adj.close()
         self.db_edges.close()
@@ -528,12 +646,19 @@ class SimpleIndexCounterKVStore:
     keys (and hence the index) already entered. 
     """
     def __init__(self, dbenv = None, db_path = b'nodes'):
+        """Initialize an index counter helper.
+
+        Args:
+            dbenv: LMDB environment.
+            db_path: Named LMDB database for the counter mapping.
+        """
         self.db_path = db_path
         self.env = dbenv
         self.kvdb = self.env.open_db(self.db_path)        
         self.max_key_idx = None
         
     def get_num_keys(self):
+        """Return the number of keys already assigned."""
         _b = self.get('num_keys'.encode('utf-8'))
         if _b is None:
             return 0
@@ -541,14 +666,17 @@ class SimpleIndexCounterKVStore:
         return num_keys
     
     def put_num_keys(self, num_keys):
+        """Persist the number of keys already assigned."""
         num_keys_bytes = struct.pack('<L',num_keys)
         _b = self.put('num_keys'.encode('utf-8'), num_keys_bytes)
 
     def put(self, key : bytes, value : bytes):
+        """Store a counter metadata key/value pair."""
         with self.env.begin(write=True, db=self.kvdb) as txn:
             txn.put(key, value)
 
     def get(self, key):
+        """Read a counter metadata value by key."""
         with self.env.begin(write=False, db=self.kvdb) as txn:
             vv = txn.get(key)
             return vv
@@ -569,4 +697,5 @@ class SimpleIndexCounterKVStore:
             return num_keys
         return _unpack_long_int(v)
     def decode_db_key(self, key):
+        """Return the stored encoded key bytes for a user key."""
         v = self.get(key.encode('utf-8'))

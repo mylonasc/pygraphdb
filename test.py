@@ -3,6 +3,7 @@
 import sys
 sys.path.append('./src')
 from pygraphdb.kvstores import LevelDBStore, LMDBStore
+from pygraphdb.sampling import SamplingHop, SamplingPattern
 from pygraphdb.serializers import JSONSerializer, MessagePackSerializer, PickleSerializer, ProtobufSerializer
 from pygraphdb.graphdb import GraphDB, Node, Edge
 
@@ -139,6 +140,35 @@ class SerializerGraphDBTests(unittest.TestCase):
             self.assertEqual(graph_db.get_adjacency_list(b"alice", direction="any"), ["alice-bob"])
         finally:
             graph_db.close()
+
+
+class SamplingConfigTests(unittest.TestCase):
+    def test_sampling_hop_round_trips_dict_config(self):
+        hop = SamplingHop.from_dict({"edge_type": "drug-to-protein", "direction": "out", "sample_size": 2})
+
+        self.assertEqual(hop.edge_type, "drug-to-protein")
+        self.assertEqual(hop.direction, "out")
+        self.assertEqual(hop.sample_size, 2)
+        self.assertEqual(
+            hop.to_dict(),
+            {"edge_type": "drug-to-protein", "direction": "out", "sample_size": 2},
+        )
+
+    def test_sampling_pattern_normalizes_dicts_and_hops(self):
+        pattern = SamplingPattern([
+            SamplingHop("drug-to-protein", sample_size=2),
+            {"edge_type": "protein-to-disease", "direction": "out", "sample_size": 1},
+        ])
+
+        self.assertEqual(len(pattern), 2)
+        self.assertEqual(pattern.hops[0].edge_type, "drug-to-protein")
+        self.assertEqual(pattern.hops[1].sample_size, 1)
+
+    def test_sampling_hop_validates_values(self):
+        with self.assertRaisesRegex(ValueError, "direction"):
+            SamplingHop("drug-to-protein", direction="sideways")
+        with self.assertRaisesRegex(ValueError, "sample_size"):
+            SamplingHop("drug-to-protein", sample_size=0)
 
 class AbstractGraphDBBase(unittest.TestCase):
     """
@@ -443,10 +473,10 @@ class TypedTraversalBase(unittest.TestCase):
 
         paths = self.graph_db.sample_typed_paths(
             ["drug-1", "drug-2"],
-            [
-                {"edge_type": "drug-to-protein", "direction": "out", "sample_size": 2},
-                {"edge_type": "protein-to-disease", "direction": "out", "sample_size": 1},
-            ],
+            SamplingPattern([
+                SamplingHop("drug-to-protein", direction="out", sample_size=2),
+                SamplingHop("protein-to-disease", direction="out", sample_size=1),
+            ]),
             rng=random.Random(3),
         )
 
