@@ -1,7 +1,15 @@
-import lmdb
-import plyvel
 from typing import Optional, Dict, List, Union
 import os
+import struct
+
+
+def _missing_dependency_error(package_name, install_name=None, feature_name=None):
+    install_name = install_name or package_name
+    feature_name = feature_name or package_name
+    return ImportError(
+        f"Missing optional dependency '{package_name}' required for {feature_name}. "
+        f"Install it with `python -m pip install {install_name}` or `uv add {install_name}`."
+    )
 
 
 def _pack_long_int(int_val):
@@ -74,7 +82,6 @@ class KVStore:
 # =========================================
 # LMDB Implementation
 # =========================================
-import struct
 class SimpleKV:
     def __init__(self, db_path):
         self.db_path = db_path
@@ -122,6 +129,11 @@ class LMDBStore(KVStore):
           - b'edges' for edge data
           - b'adj'   for adjacency lists
         """
+        try:
+            import lmdb
+        except ImportError as exc:
+            raise _missing_dependency_error("lmdb", feature_name="LMDBStore") from exc
+
         max_dbs = 3
         if map_keys:
             map_dbs += 2
@@ -282,6 +294,10 @@ class LMDBStore(KVStore):
 class LevelDBStore(KVStore):
     def __init__(self, path='graph_leveldb'):
         """Create or open a LevelDB store. We'll store nodes/edges by prefix."""
+        try:
+            import plyvel
+        except ImportError as exc:
+            raise _missing_dependency_error("plyvel", feature_name="LevelDBStore") from exc
         
         self.db_paths = {'nodes' : os.path.join('nodes'), 'edges': os.path.join('edges'), 'adjacency' : os.path.join('adjacency')}
         if not os.path.exists(path):

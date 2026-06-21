@@ -8,11 +8,15 @@ version = "0.1.0"
 description = "A pure Python GraphDB for attributed graphs."
 readme = "README.md"
 requires-python = ">=3.9"
-dependencies = [
-    "lmdb",
-    "plyvel",
-    "pybloom-live",
-]
+dependencies = []
+
+[project.optional-dependencies]
+lmdb = ["lmdb"]
+leveldb = ["plyvel"]
+msgpack = ["msgpack"]
+protobuf = ["protobuf"]
+bloom = ["pybloom-live"]
+all = ["lmdb", "msgpack", "plyvel", "protobuf", "pybloom-live"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

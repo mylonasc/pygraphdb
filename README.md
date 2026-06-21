@@ -33,6 +33,13 @@ Install directly from the Git repository:
 uv add git+https://github.com/mylonasc/pygraphdb.git
 ```
 
+Install optional backends or serializers only when you need them:
+
+```sh
+uv add "/path/to/pygraphdb[lmdb,msgpack,protobuf]"
+uv add "git+https://github.com/mylonasc/pygraphdb.git#egg=pygraphdb[all]"
+```
+
 ## With pip
 
 From this repository:
@@ -61,6 +68,15 @@ Install directly from the Git repository:
 ```sh
 python -m pip install git+https://github.com/mylonasc/pygraphdb.git
 ```
+
+Install optional backends or serializers only when you need them:
+
+```sh
+python -m pip install "/path/to/pygraphdb[lmdb,msgpack,protobuf]"
+python -m pip install "pygraphdb[all] @ git+https://github.com/mylonasc/pygraphdb.git"
+```
+
+Available extras are `lmdb`, `leveldb`, `msgpack`, `protobuf`, `bloom`, and `all`. Optional packages are imported only when the corresponding backend or serializer is used. If one is missing, PyGraphDB raises an error naming the missing package and the install command.
 
 After installation, import modules through the `pygraphdb` package, for example `pygraphdb.graphdb`, `pygraphdb.kvstores`, and `pygraphdb.serializers`.
 

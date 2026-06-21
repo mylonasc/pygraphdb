@@ -3,13 +3,141 @@
 import sys
 sys.path.append('./src')
 from pygraphdb.kvstores import LevelDBStore, LMDBStore
-from pygraphdb.serializers import PickleSerializer, JSONSerializer
+from pygraphdb.serializers import JSONSerializer, MessagePackSerializer, PickleSerializer, ProtobufSerializer
 from pygraphdb.graphdb import GraphDB, Node, Edge
 
+import builtins
+from contextlib import contextmanager
 import shutil
 import tempfile
 import unittest 
 import abc
+
+
+@contextmanager
+def blocked_import(package_name):
+    original_import = builtins.__import__
+
+    def import_hook(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == package_name or name.startswith(f"{package_name}."):
+            raise ImportError(f"blocked import: {package_name}")
+        return original_import(name, globals, locals, fromlist, level)
+
+    builtins.__import__ = import_hook
+    try:
+        yield
+    finally:
+        builtins.__import__ = original_import
+
+
+class OptionalDependencyTests(unittest.TestCase):
+    def assert_missing_dependency_error(self, callable_obj, package_name):
+        with self.assertRaisesRegex(
+            ImportError,
+            f"Missing optional dependency '{package_name}'.*python -m pip install {package_name}.*uv add {package_name}",
+        ):
+            callable_obj()
+
+    def test_lmdb_store_reports_missing_lmdb_when_used(self):
+        with blocked_import("lmdb"):
+            self.assert_missing_dependency_error(lambda: LMDBStore(), "lmdb")
+
+    def test_leveldb_store_reports_missing_plyvel_when_used(self):
+        with blocked_import("plyvel"):
+            self.assert_missing_dependency_error(lambda: LevelDBStore(), "plyvel")
+
+    def test_messagepack_serializer_reports_missing_msgpack_when_used(self):
+        with blocked_import("msgpack"):
+            self.assert_missing_dependency_error(
+                lambda: MessagePackSerializer().serialize({"name": "Alice"}),
+                "msgpack",
+            )
+
+    def test_protobuf_serializer_reports_missing_protobuf_when_used(self):
+        with blocked_import("google.protobuf"):
+            self.assert_missing_dependency_error(
+                lambda: ProtobufSerializer().serialize({"name": "Alice"}),
+                "protobuf",
+            )
+
+
+class SerializerTests(unittest.TestCase):
+    def serializer_round_trip_cases(self):
+        return [
+            PickleSerializer(),
+            JSONSerializer(),
+            MessagePackSerializer(),
+            ProtobufSerializer(),
+        ]
+
+    def test_serializers_round_trip_json_like_dicts(self):
+        payload = {
+            "id": "alice",
+            "properties": {
+                "name": "Alice",
+                "age": 30,
+                "score": 9.5,
+                "active": True,
+                "tags": ["person", "employee"],
+                "metadata": {"department": "Engineering"},
+            },
+        }
+
+        for serializer in self.serializer_round_trip_cases():
+            with self.subTest(serializer=serializer.__class__.__name__):
+                self.assertEqual(serializer.deserialize(serializer.serialize(payload)), payload)
+
+    def test_binary_serializers_round_trip_bytes(self):
+        payload = {
+            "edge_ids": [b"edge-1", b"edge-2"],
+            "properties": {"raw": b"\x00\x01\x02"},
+        }
+
+        for serializer in [PickleSerializer(), MessagePackSerializer(), ProtobufSerializer()]:
+            with self.subTest(serializer=serializer.__class__.__name__):
+                self.assertEqual(serializer.deserialize(serializer.serialize(payload)), payload)
+
+
+class SerializerGraphDBTests(unittest.TestCase):
+    def setUp(self):
+        self.test_dir = tempfile.mkdtemp(prefix="graphdb_serializer_test_")
+
+    def tearDown(self):
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    def test_graphdb_round_trip_with_messagepack_serializer(self):
+        graph_db = GraphDB(LMDBStore(path=self.test_dir), MessagePackSerializer())
+        try:
+            node_a = Node(node_id="alice", properties={"name": "Alice", "age": 30})
+            node_b = Node(node_id="bob", properties={"name": "Bob"})
+            edge = Edge(edge_id="alice-bob", source=node_a.get_id, target=node_b.get_id, properties={"relation": "friend"})
+
+            graph_db.put_node(node_a)
+            graph_db.put_node(node_b)
+            graph_db.put_edge(edge)
+
+            self.assertEqual(graph_db.get_node(b"alice").properties, node_a.properties)
+            self.assertEqual(graph_db.get_edge(b"alice-bob").properties, edge.properties)
+            self.assertEqual(graph_db.get_adjacency_list(b"alice", direction="any"), ["alice-bob"])
+        finally:
+            graph_db.close()
+
+    def test_graphdb_round_trip_with_protobuf_serializer(self):
+        graph_db = GraphDB(LMDBStore(path=self.test_dir), ProtobufSerializer())
+        try:
+            node_a = Node(node_id="alice", properties={"name": "Alice", "age": 30})
+            node_b = Node(node_id="bob", properties={"name": "Bob"})
+            edge = Edge(edge_id="alice-bob", source=node_a.get_id, target=node_b.get_id, properties={"relation": "friend"})
+
+            graph_db.put_node(node_a)
+            graph_db.put_node(node_b)
+            graph_db.put_edge(edge)
+
+            self.assertEqual(graph_db.get_node(b"alice").properties, node_a.properties)
+            self.assertEqual(graph_db.get_edge(b"alice-bob").properties, edge.properties)
+            self.assertEqual(graph_db.get_adjacency_list(b"alice", direction="any"), ["alice-bob"])
+        finally:
+            graph_db.close()
 
 class AbstractGraphDBBase(unittest.TestCase):
     """
