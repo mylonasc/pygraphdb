@@ -5,6 +5,8 @@
 
 A pure python GraphDB for attributed graphs. 
 
+Documentation: https://mylonasc.github.io/pygraphdb/
+
 # Installation
 
 ## With uv

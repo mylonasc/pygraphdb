@@ -10,6 +10,7 @@ __pycache__/
 .coverage
 .coverage.*
 htmlcov/
+docs/_build/
 .ipynb_checkpoints/
 graph_lmdb*/
 graph_leveldb*/
