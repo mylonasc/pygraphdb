@@ -5,49 +5,97 @@
 
 A pure python GraphDB for attributed graphs. 
 
-# Development
+# Installation
+
+## With uv
+
+From this repository:
 
 ```sh
 uv sync
-uv sync --extra lmdb      # optional LMDB backend
-uv sync --extra leveldb   # optional LevelDB backend
-uv build
 ```
+
+Install the package from a local checkout into another project:
+
+```sh
+uv add /path/to/pygraphdb
+```
+
+For editable development installs:
+
+```sh
+uv add --editable /path/to/pygraphdb
+```
+
+Install directly from the Git repository:
+
+```sh
+uv add git+https://github.com/mylonasc/pygraphdb.git
+```
+
+## With pip
+
+From this repository:
+
+```sh
+python -m venv .venv
+. .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install .
+```
+
+Install the package from a local checkout into another project:
+
+```sh
+python -m pip install /path/to/pygraphdb
+```
+
+For editable development installs:
+
+```sh
+python -m pip install -e /path/to/pygraphdb
+```
+
+Install directly from the Git repository:
+
+```sh
+python -m pip install git+https://github.com/mylonasc/pygraphdb.git
+```
+
+After installation, import modules through the `pygraphdb` package, for example `pygraphdb.graphdb`, `pygraphdb.kvstores`, and `pygraphdb.serializers`.
 
 # Example usage
 
 ```python
 # 1. Choose a store and serializer
-from kvstores import InMemoryKVStore
-from graphdb import GraphDB, Node, Edge
-from serializers import PickleSerializer
-
-store = InMemoryKVStore()
+from pygraphdb.kvstores import LMDBStore
+from pygraphdb.graphdb import GraphDB, Node, Edge
+from pygraphdb.serializers import PickleSerializer
+lmdb_store = LMDBStore(path='graph_lmdb_example')
 serializer = PickleSerializer()
 
 # 2. Create the GraphDB 
-graph_db = GraphDB(store, serializer)
+graph_db = GraphDB(lmdb_store, serializer)
 
 # 3. Create and put a Node
-node_a = Node('alice', labels=['Person'], properties={'name': 'Alice', 'age': 30})
+node_a = Node(properties={'name': 'Alice', 'age': 30})
 graph_db.put_node(node_a)
 
 # 4. Create and put another Node
-node_b = Node('bob', labels=['Person'], properties={'name': 'Bob', 'age': 25})
+node_b = Node(properties={'name': 'Bob', 'age': 25})
 graph_db.put_node(node_b)
 
 # 5. Create an Edge between them
-edge_ab = Edge('alice-knows-bob', source=node_a.get_id, target=node_b.get_id, type='KNOWS')
+edge_ab = Edge(source=node_a.get_id, target=node_b.get_id, properties={'relation': 'friend'})
 graph_db.put_edge(edge_ab)
 
 # 6. Retrieve a node
-fetched_node_a = graph_db.get_node('alice')
+fetched_node_a = graph_db.get_node(node_a.get_id_bytes)
 print("Fetched Node A:", fetched_node_a.to_dict())
 
-# 7. Property graph lookups and traversal
-print(graph_db.find_nodes(labels=['Person']))
-print(graph_db.find_edges(type='KNOWS', source='alice'))
-print(graph_db.neighbors('alice', direction='out'))
+# 7. Retrieve an edge
+fetched_edge_ab = graph_db.get_edge(edge_ab.get_id_bytes)
+print("Fetched Edge A->B:", fetched_edge_ab.to_dict())
 
 # 8. Cleanup
 graph_db.close()

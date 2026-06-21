@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -9,15 +9,10 @@ description = "A pure Python GraphDB for attributed graphs."
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
-    "msgpack>=1.0.0",
+    "lmdb",
+    "plyvel",
+    "pybloom-live",
 ]
 
-[project.optional-dependencies]
-lmdb = ["lmdb"]
-leveldb = ["plyvel"]
-bloom = ["pybloom-live"]
-all = ["lmdb", "plyvel", "pybloom-live"]
-
-[tool.setuptools]
-package-dir = {"" = "src"}
-py-modules = ["graphdb", "kvstores", "serializers"]
+[tool.setuptools.packages.find]
+where = ["src"]
