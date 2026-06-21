@@ -8,6 +8,7 @@ from pygraphdb.graphdb import GraphDB, Node, Edge
 
 import builtins
 from contextlib import contextmanager
+import random
 import shutil
 import tempfile
 import unittest 
@@ -332,6 +333,172 @@ class AbstractGraphDBBase(unittest.TestCase):
         # print(bfs_result)
         # self.assertEqual(set(bfs_result), {node_a.get_id_bytes, node_b.get_id_bytes, node_c.get_id_bytes})
         # self.assertEqual(len(bfs_result), 3, "BFS should visit exactly 3 nodes")
+
+
+class TypedTraversalBase(unittest.TestCase):
+    def get_store(self, path: str):
+        return LMDBStore(path=path)
+
+    def setUp(self):
+        self.test_dir = tempfile.mkdtemp(prefix="typed_graphdb_test_")
+        self.graph_db = GraphDB(self.get_store(self.test_dir), PickleSerializer())
+
+    def tearDown(self):
+        self.graph_db.close()
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    def populate_typed_graph(self):
+        nodes = [
+            Node(node_id="drug-1", properties={"kind": "drug"}),
+            Node(node_id="drug-2", properties={"kind": "drug"}),
+            Node(node_id="protein-1", properties={"kind": "protein"}),
+            Node(node_id="protein-2", properties={"kind": "protein"}),
+            Node(node_id="protein-3", properties={"kind": "protein"}),
+            Node(node_id="disease-1", properties={"kind": "disease"}),
+            Node(node_id="disease-2", properties={"kind": "disease"}),
+            Node(node_id="disease-3", properties={"kind": "disease"}),
+        ]
+        for node in nodes:
+            self.graph_db.put_node(node)
+
+        edges = [
+            Edge(edge_id="d1-p1", source="drug-1", target="protein-1", properties={"type": "drug-to-protein"}),
+            Edge(edge_id="d1-p2", source="drug-1", target="protein-2", properties={"type": "drug-to-protein"}),
+            Edge(edge_id="d1-disease", source="drug-1", target="disease-1", properties={"type": "drug-to-disease"}),
+            Edge(edge_id="d2-p3", source="drug-2", target="protein-3", properties={"type": "drug-to-protein"}),
+            Edge(edge_id="p1-dis1", source="protein-1", target="disease-1", properties={"type": "protein-to-disease"}),
+            Edge(edge_id="p1-dis2", source="protein-1", target="disease-2", properties={"type": "protein-to-disease"}),
+            Edge(edge_id="p2-dis3", source="protein-2", target="disease-3", properties={"type": "protein-to-disease"}),
+        ]
+        self.graph_db.put_edges_bulk(edges)
+        return edges
+
+    def test_typed_adjacency_filters_type_and_direction(self):
+        self.populate_typed_graph()
+
+        self.assertEqual(
+            set(self.graph_db.neighbors_by_edge_type("drug-1", "drug-to-protein", direction="out")),
+            {b"protein-1", b"protein-2"},
+        )
+        self.assertEqual(
+            self.graph_db.neighbors_by_edge_type("drug-1", "drug-to-protein", direction="in"),
+            [],
+        )
+        self.assertEqual(
+            self.graph_db.neighbors_by_edge_type("protein-1", "drug-to-protein", direction="in"),
+            [b"drug-1"],
+        )
+        self.assertEqual(
+            self.graph_db.neighbors_by_edge_type("drug-1", "drug-to-disease", direction="out"),
+            [b"disease-1"],
+        )
+
+    def test_deleting_typed_edge_removes_typed_adjacency(self):
+        self.populate_typed_graph()
+
+        self.graph_db.delete_edge(b"d1-p1")
+
+        self.assertEqual(
+            self.graph_db.neighbors_by_edge_type("drug-1", "drug-to-protein", direction="out"),
+            [b"protein-2"],
+        )
+        self.assertEqual(
+            self.graph_db.neighbors_by_edge_type("protein-1", "drug-to-protein", direction="in"),
+            [],
+        )
+
+    def test_replacing_typed_edge_removes_stale_typed_adjacency(self):
+        self.populate_typed_graph()
+
+        self.graph_db.put_edge(
+            Edge(edge_id="d1-p1", source="drug-1", target="disease-2", properties={"type": "drug-to-disease"})
+        )
+
+        self.assertEqual(
+            self.graph_db.neighbors_by_edge_type("drug-1", "drug-to-protein", direction="out"),
+            [b"protein-2"],
+        )
+        self.assertEqual(
+            set(self.graph_db.neighbors_by_edge_type("drug-1", "drug-to-disease", direction="out")),
+            {b"disease-1", b"disease-2"},
+        )
+
+    def test_sample_neighbors_uses_typed_frontier(self):
+        self.populate_typed_graph()
+
+        sample = self.graph_db.sample_neighbors(
+            "drug-1",
+            "drug-to-protein",
+            direction="out",
+            sample_size=1,
+            rng=random.Random(7),
+        )
+
+        self.assertEqual(len(sample), 1)
+        self.assertEqual(sample[0]["edge_type"], "drug-to-protein")
+        self.assertIn(sample[0]["neighbor_id"], {b"protein-1", b"protein-2"})
+
+    def test_sample_typed_paths_respects_edge_type_sequence(self):
+        self.populate_typed_graph()
+
+        paths = self.graph_db.sample_typed_paths(
+            ["drug-1", "drug-2"],
+            [
+                {"edge_type": "drug-to-protein", "direction": "out", "sample_size": 2},
+                {"edge_type": "protein-to-disease", "direction": "out", "sample_size": 1},
+            ],
+            rng=random.Random(3),
+        )
+
+        self.assertTrue(paths)
+        for sampled_path in paths:
+            self.assertEqual(len(sampled_path["path"]), 2)
+            self.assertEqual(sampled_path["path"][0]["edge_type"], "drug-to-protein")
+            self.assertEqual(sampled_path["path"][1]["edge_type"], "protein-to-disease")
+            self.assertTrue(sampled_path["path"][0]["target_id"].startswith(b"protein-"))
+            self.assertTrue(sampled_path["path"][1]["target_id"].startswith(b"disease-"))
+
+    def test_sample_typed_subgraph_materializes_sampled_records(self):
+        self.populate_typed_graph()
+
+        subgraph = self.graph_db.sample_typed_subgraph(
+            ["drug-1"],
+            [
+                {"edge_type": "drug-to-protein", "direction": "out", "sample_size": 1},
+                {"edge_type": "protein-to-disease", "direction": "out", "sample_size": 1},
+            ],
+            rng=random.Random(11),
+        )
+
+        self.assertIn(b"drug-1", subgraph["nodes"])
+        self.assertTrue(subgraph["edges"])
+        self.assertTrue(subgraph["paths"])
+        self.assertTrue(all(node is not None for node in subgraph["nodes"].values()))
+        self.assertTrue(all(edge is not None for edge in subgraph["edges"].values()))
+
+    def test_rebuild_typed_adjacency_from_edge_records(self):
+        for node_id in ["drug-1", "protein-1"]:
+            self.graph_db.put_node(Node(node_id=node_id))
+        edge = Edge(edge_id="d1-p1", source="drug-1", target="protein-1", properties={"type": "drug-to-protein"})
+        self.graph_db.store.put_edge(edge.get_id_bytes, self.graph_db.entity_serializer.serialize(edge, "Edge"))
+
+        self.assertEqual(self.graph_db.neighbors_by_edge_type("drug-1", "drug-to-protein", direction="out"), [])
+
+        self.assertEqual(self.graph_db.rebuild_typed_adjacency(), 1)
+        self.assertEqual(
+            self.graph_db.neighbors_by_edge_type("drug-1", "drug-to-protein", direction="out"),
+            [b"protein-1"],
+        )
+
+
+class TestTypedTraversalWithLMDB(TypedTraversalBase):
+    def get_store(self, path: str):
+        return LMDBStore(path=path)
+
+
+class TestTypedTraversalWithLevelDB(TypedTraversalBase):
+    def get_store(self, path: str):
+        return LevelDBStore(path=path)
 
 class TestGraphDBWithLMDB(AbstractGraphDBBase):
     def get_store(self, path: str):

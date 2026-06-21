@@ -116,3 +116,64 @@ print("Fetched Edge A->B:", fetched_edge_ab.to_dict())
 # 8. Cleanup
 graph_db.close()
 ```
+
+# Typed sampled traversal
+
+Store edge types in `edge.properties['type']`. PyGraphDB maintains typed adjacency indexes for these edges, so traversals can scan only the requested edge type instead of loading all incident edges and filtering in Python.
+
+```python
+import random
+
+from pygraphdb.graphdb import Edge, GraphDB, Node
+from pygraphdb.kvstores import LMDBStore
+from pygraphdb.serializers import PickleSerializer
+
+graph_db = GraphDB(LMDBStore(path='typed_graph_lmdb'), PickleSerializer())
+
+graph_db.put_node(Node(node_id='drug-1'))
+graph_db.put_node(Node(node_id='protein-1'))
+graph_db.put_node(Node(node_id='disease-1'))
+
+graph_db.put_edge(Edge(
+    edge_id='drug-1-protein-1',
+    source='drug-1',
+    target='protein-1',
+    properties={'type': 'drug-to-protein'},
+))
+graph_db.put_edge(Edge(
+    edge_id='protein-1-disease-1',
+    source='protein-1',
+    target='disease-1',
+    properties={'type': 'protein-to-disease'},
+))
+
+paths = graph_db.sample_typed_paths(
+    seed_ids=['drug-1'],
+    pattern=[
+        {'edge_type': 'drug-to-protein', 'direction': 'out', 'sample_size': 10},
+        {'edge_type': 'protein-to-disease', 'direction': 'out', 'sample_size': 10},
+    ],
+    rng=random.Random(7),
+)
+
+subgraph = graph_db.sample_typed_subgraph(
+    seed_ids=['drug-1'],
+    pattern=[
+        {'edge_type': 'drug-to-protein', 'direction': 'out', 'sample_size': 10},
+        {'edge_type': 'protein-to-disease', 'direction': 'out', 'sample_size': 10},
+    ],
+)
+
+graph_db.close()
+```
+
+Useful typed traversal methods:
+
+```python
+graph_db.neighbors_by_edge_type('drug-1', 'drug-to-protein', direction='out')
+graph_db.edges_by_edge_type('drug-1', 'drug-to-protein', direction='out')
+graph_db.sample_neighbors('drug-1', 'drug-to-protein', direction='out', sample_size=10)
+graph_db.sample_typed_paths(seed_ids, pattern)
+graph_db.sample_typed_subgraph(seed_ids, pattern)
+graph_db.rebuild_typed_adjacency()
+```

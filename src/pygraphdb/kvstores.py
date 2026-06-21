@@ -3,6 +3,9 @@ import os
 import struct
 
 
+_TYPED_ADJ_SEP = b"\x1f"
+
+
 def _missing_dependency_error(package_name, install_name=None, feature_name=None):
     install_name = install_name or package_name
     feature_name = feature_name or package_name
@@ -17,6 +20,15 @@ def _pack_long_int(int_val):
 
 def _unpack_long_int(int_val):
     return struct.unpack('<L', int_val)[0]
+
+
+def _typed_adjacency_key(direction: str, node_id: bytes, edge_type: str, edge_id: bytes = b"") -> bytes:
+    edge_type_bytes = edge_type.encode("utf-8")
+    return _TYPED_ADJ_SEP.join([direction.encode("utf-8"), node_id, edge_type_bytes, edge_id])
+
+
+def _typed_adjacency_prefix(direction: str, node_id: bytes, edge_type: str) -> bytes:
+    return _typed_adjacency_key(direction, node_id, edge_type)
 
 
 class KVStore:
@@ -79,6 +91,15 @@ class KVStore:
     def get_edges_bulk(self, edge_ids: list[str]) -> dict[str, bytes]:
         raise NotImplementedError
 
+    def put_typed_adjacency(self, source_id: bytes, target_id: bytes, edge_type: str, edge_id: bytes):
+        raise NotImplementedError
+
+    def delete_typed_adjacency(self, source_id: bytes, target_id: bytes, edge_type: str, edge_id: bytes):
+        raise NotImplementedError
+
+    def iter_typed_adjacency(self, node_id: bytes, edge_type: str, direction: str = "out"):
+        raise NotImplementedError
+
 # =========================================
 # LMDB Implementation
 # =========================================
@@ -134,13 +155,14 @@ class LMDBStore(KVStore):
         except ImportError as exc:
             raise _missing_dependency_error("lmdb", feature_name="LMDBStore") from exc
 
-        max_dbs = 3
+        max_dbs = 4
         if map_keys:
-            map_dbs += 2
+            max_dbs += 2
         self.env = lmdb.open(path, map_size=map_size, subdir=True, max_dbs=max_dbs)
         self.nodes_db = self.env.open_db(b'nodes')
         self.edges_db = self.env.open_db(b'edges')
-        self.adj_db   = self.env.open_db(b'adj')        
+        self.adj_db   = self.env.open_db(b'adj')
+        self.typed_adj_db = self.env.open_db(b'typed_adj')
 
         if map_keys:
             self.node_key_encdec_db = self.env.open_db(b'node_key_db')
@@ -204,9 +226,8 @@ class LMDBStore(KVStore):
     def put_nodes_bulk(self, keys_and_values: dict[bytes, bytes]):
         """Write a batch of nodes in a single transaction."""
         with self.env.begin(write=True, db=self.nodes_db) as txn:
-            txn.putmulti([(k, v) for k , v in keys_and_values.items()])
-            # for node_id, val in keys_and_values.items():
-            #     txn.put(node_id, val)
+            for node_id, val in keys_and_values.items():
+                txn.put(node_id, val)
     
     def get_nodes_bulk(self, node_ids: list[bytes]) -> dict[bytes, bytes]:
         """Retrieve multiple nodes in one read transaction."""
@@ -233,6 +254,18 @@ class LMDBStore(KVStore):
                 if data is not None:
                     results[edge_id] = data
         return results
+
+    def get_edge_keys_generator(self, num_edges = None, key_offset = None):
+        yielded = 0
+        with self.env.begin(write=False, db=self.edges_db) as txn:
+            with txn.cursor() as c:
+                if key_offset is not None:
+                    c.set_range(key_offset)
+                for k, _ in c:
+                    yield k
+                    yielded += 1
+                    if num_edges is not None and yielded == num_edges:
+                        break
     
     def get_node_keys_generator(self, num_nodes = None, key_offset = None):
         yielded = 0
@@ -286,6 +319,29 @@ class LMDBStore(KVStore):
                     results[node_id] = data
         return results
 
+    # ----- Typed Adjacency Methods -----
+    def put_typed_adjacency(self, source_id: bytes, target_id: bytes, edge_type: str, edge_id: bytes):
+        with self.env.begin(write=True, db=self.typed_adj_db) as txn:
+            txn.put(_typed_adjacency_key("out", source_id, edge_type, edge_id), target_id)
+            txn.put(_typed_adjacency_key("in", target_id, edge_type, edge_id), source_id)
+
+    def delete_typed_adjacency(self, source_id: bytes, target_id: bytes, edge_type: str, edge_id: bytes):
+        with self.env.begin(write=True, db=self.typed_adj_db) as txn:
+            txn.delete(_typed_adjacency_key("out", source_id, edge_type, edge_id))
+            txn.delete(_typed_adjacency_key("in", target_id, edge_type, edge_id))
+
+    def iter_typed_adjacency(self, node_id: bytes, edge_type: str, direction: str = "out"):
+        prefix = _typed_adjacency_prefix(direction, node_id, edge_type)
+        with self.env.begin(write=False, db=self.typed_adj_db) as txn:
+            cursor = txn.cursor()
+            if not cursor.set_range(prefix):
+                return
+            for key, neighbor_id in cursor:
+                if not key.startswith(prefix):
+                    break
+                edge_id = key[len(prefix):]
+                yield edge_id, neighbor_id
+
 
 # =========================================
 # LevelDB Implementation
@@ -299,16 +355,18 @@ class LevelDBStore(KVStore):
         except ImportError as exc:
             raise _missing_dependency_error("plyvel", feature_name="LevelDBStore") from exc
         
-        self.db_paths = {'nodes' : os.path.join('nodes'), 'edges': os.path.join('edges'), 'adjacency' : os.path.join('adjacency')}
+        self.db_paths = {'nodes' : os.path.join('nodes'), 'edges': os.path.join('edges'), 'adjacency' : os.path.join('adjacency'), 'typed_adjacency': os.path.join('typed_adjacency')}
         if not os.path.exists(path):
             os.makedirs(path, exist_ok=True)
         self.db_nodes = plyvel.DB(os.path.join(path, 'nodes'), create_if_missing=True)
         self.db_edges = plyvel.DB(os.path.join(path, 'edges'), create_if_missing=True)
         self.db_adj   = plyvel.DB(os.path.join(path, 'adjacency'), create_if_missing=True)
+        self.db_typed_adj = plyvel.DB(os.path.join(path, 'typed_adjacency'), create_if_missing=True)
         self.db_dict = {
             'nodes' : self.db_nodes,
             'edges' : self.db_edges,
-            'adjacency' : self.db_adj
+            'adjacency' : self.db_adj,
+            'typed_adjacency': self.db_typed_adj,
         }
     # def put(self, key: bytes, value: bytes):
     #     self.db.put(key, value)
@@ -333,6 +391,24 @@ class LevelDBStore(KVStore):
 
     def get_node_keys_iterator(self):
         return self.get_db_iterator(which_db='nodes')
+
+    def get_node_keys_generator(self, num_nodes = None, key_offset = None):
+        yielded = 0
+        with self.db_nodes.iterator(start=key_offset) as it:
+            for k, _ in it:
+                yield k
+                yielded += 1
+                if num_nodes is not None and yielded == num_nodes:
+                    break
+
+    def get_edge_keys_generator(self, num_edges = None, key_offset = None):
+        yielded = 0
+        with self.db_edges.iterator(start=key_offset) as it:
+            for k, _ in it:
+                yield k
+                yielded += 1
+                if num_edges is not None and yielded == num_edges:
+                    break
 
 
     # -- Specialized methods for nodes
@@ -419,7 +495,26 @@ class LevelDBStore(KVStore):
                 results[node_id] = data
         return results
 
+    # ----- Typed Adjacency Methods -----
+    def put_typed_adjacency(self, source_id: bytes, target_id: bytes, edge_type: str, edge_id: bytes):
+        with self.db_typed_adj.write_batch() as wb:
+            wb.put(_typed_adjacency_key("out", source_id, edge_type, edge_id), target_id)
+            wb.put(_typed_adjacency_key("in", target_id, edge_type, edge_id), source_id)
+
+    def delete_typed_adjacency(self, source_id: bytes, target_id: bytes, edge_type: str, edge_id: bytes):
+        with self.db_typed_adj.write_batch() as wb:
+            wb.delete(_typed_adjacency_key("out", source_id, edge_type, edge_id))
+            wb.delete(_typed_adjacency_key("in", target_id, edge_type, edge_id))
+
+    def iter_typed_adjacency(self, node_id: bytes, edge_type: str, direction: str = "out"):
+        prefix = _typed_adjacency_prefix(direction, node_id, edge_type)
+        with self.db_typed_adj.iterator(prefix=prefix) as it:
+            for key, neighbor_id in it:
+                edge_id = key[len(prefix):]
+                yield edge_id, neighbor_id
+
     def close(self):
+        self.db_typed_adj.close()
         self.db_adj.close()
         self.db_edges.close()
         self.db_nodes.close()

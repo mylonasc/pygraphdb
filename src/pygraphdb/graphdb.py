@@ -4,6 +4,7 @@ from __future__ import annotations
 import pickle
 import json
 import os
+import random
 import uuid
 from typing import TYPE_CHECKING, List, Optional, Union
 
@@ -50,7 +51,7 @@ class Node:
     @property
     def get_id_bytes(self):
         return self._id.encode('utf-8')
-    
+
     def to_dict(self):
         """Convert to a dictionary form for serialization."""
         return {
@@ -79,6 +80,10 @@ class Edge:
     @property
     def get_id_bytes(self):
         return self._id.encode('utf-8')
+
+    @property
+    def get_type(self):
+        return self.properties.get('type')
 
     def to_dict(self):
         """Convert to a dictionary for serialization."""
@@ -198,15 +203,34 @@ class GraphDB:
         self.store.delete_node(node_id)
 
     def node_key_to_bytes(self, node_key):
+        if isinstance(node_key, bytes):
+            return node_key
         return node_key.encode('utf-8')
+
+    def edge_key_to_bytes(self, edge_key):
+        if isinstance(edge_key, bytes):
+            return edge_key
+        return edge_key.encode('utf-8')
+
+    def key_to_string(self, key):
+        if isinstance(key, bytes):
+            return key.decode('utf-8')
+        return key
+
+    def edge_type(self, edge: Edge):
+        return edge.get_type
 
     # -----------
     # Edge Methods
     # -----------
     def put_edge(self, edge: Edge, update_adjacency = True):
         # edge_dict = edge.to_dict()
+        old_edge = self.get_edge(edge.get_id_bytes)
+        if old_edge is not None:
+            self._delete_typed_adjacency_for_edge(old_edge)
         value = self.entity_serializer.serialize(edge,'Edge')
         self.store.put_edge(edge.get_id_bytes, value)
+        self._put_typed_adjacency_for_edge(edge)
         if update_adjacency:
             # Get the edge lists from the adjacency store, 
             # and if they exist update them, if they don't exist 
@@ -222,6 +246,138 @@ class GraphDB:
                     adj_edge_list = self.entity_serializer.deserialize(adj_list,'AdjacencyList')
                     adj_edge_list.setdefault(dict_flag, []).append(edge.get_id)
                     self.store.put_adjacency(io_node_key, self.serializer.serialize(adj_edge_list))
+
+    def _put_typed_adjacency_for_edge(self, edge: Edge):
+        edge_type = self.edge_type(edge)
+        if edge_type is None:
+            return
+        self.store.put_typed_adjacency(
+            self.node_key_to_bytes(edge.source),
+            self.node_key_to_bytes(edge.target),
+            edge_type,
+            edge.get_id_bytes,
+        )
+
+    def _delete_typed_adjacency_for_edge(self, edge: Edge):
+        edge_type = self.edge_type(edge)
+        if edge_type is None:
+            return
+        self.store.delete_typed_adjacency(
+            self.node_key_to_bytes(edge.source),
+            self.node_key_to_bytes(edge.target),
+            edge_type,
+            edge.get_id_bytes,
+        )
+
+    def get_typed_adjacency(self, node_id, edge_type: str, direction: str = 'out'):
+        """Return typed adjacency records with clean direction semantics.
+
+        `out` means source -> target, `in` means target -> source, and `any`
+        returns the union of both directions.
+        """
+        if direction not in {'out', 'in', 'any'}:
+            raise ValueError("direction must be 'out', 'in', or 'any'")
+
+        node_id_bytes = self.node_key_to_bytes(node_id)
+        directions = ['out', 'in'] if direction == 'any' else [direction]
+        records = []
+        for current_direction in directions:
+            for edge_id, neighbor_id in self.store.iter_typed_adjacency(node_id_bytes, edge_type, current_direction):
+                if current_direction == 'out':
+                    source_id = node_id_bytes
+                    target_id = neighbor_id
+                else:
+                    source_id = neighbor_id
+                    target_id = node_id_bytes
+                records.append({
+                    'edge_id': edge_id,
+                    'neighbor_id': neighbor_id,
+                    'source_id': source_id,
+                    'target_id': target_id,
+                    'edge_type': edge_type,
+                    'direction': current_direction,
+                })
+        return records
+
+    def neighbors_by_edge_type(self, node_id, edge_type: str, direction: str = 'out'):
+        return [record['neighbor_id'] for record in self.get_typed_adjacency(node_id, edge_type, direction)]
+
+    def edges_by_edge_type(self, node_id, edge_type: str, direction: str = 'out'):
+        return [record['edge_id'] for record in self.get_typed_adjacency(node_id, edge_type, direction)]
+
+    def sample_neighbors(self, node_id, edge_type: str, direction: str = 'out', sample_size: int = 10, rng=None):
+        rng = rng or random
+        sample = []
+        seen = 0
+        for record in self.get_typed_adjacency(node_id, edge_type, direction):
+            seen += 1
+            if len(sample) < sample_size:
+                sample.append(record)
+                continue
+            replacement_idx = rng.randrange(seen)
+            if replacement_idx < sample_size:
+                sample[replacement_idx] = record
+        return sample
+
+    def sample_typed_paths(self, seed_ids, pattern: list[dict], rng=None):
+        rng = rng or random
+        paths = []
+
+        for seed_id in seed_ids:
+            seed_id_bytes = self.node_key_to_bytes(seed_id)
+            frontier = [{'seed': seed_id_bytes, 'path': [], 'current_node_id': seed_id_bytes}]
+            for hop in pattern:
+                next_frontier = []
+                edge_type = hop['edge_type']
+                direction = hop.get('direction', 'out')
+                sample_size = hop.get('sample_size', 10)
+                for partial in frontier:
+                    sampled_records = self.sample_neighbors(
+                        partial['current_node_id'],
+                        edge_type,
+                        direction=direction,
+                        sample_size=sample_size,
+                        rng=rng,
+                    )
+                    for record in sampled_records:
+                        next_frontier.append({
+                            'seed': partial['seed'],
+                            'path': partial['path'] + [record],
+                            'current_node_id': record['neighbor_id'],
+                        })
+                frontier = next_frontier
+                if not frontier:
+                    break
+            for partial in frontier:
+                paths.append({'seed': partial['seed'], 'path': partial['path']})
+        return paths
+
+    def sample_typed_subgraph(self, seed_ids, pattern: list[dict], rng=None):
+        paths = self.sample_typed_paths(seed_ids, pattern, rng=rng)
+        node_ids = {self.node_key_to_bytes(seed_id) for seed_id in seed_ids}
+        edge_ids = set()
+        for sampled_path in paths:
+            node_ids.add(sampled_path['seed'])
+            for hop in sampled_path['path']:
+                node_ids.add(hop['source_id'])
+                node_ids.add(hop['target_id'])
+                edge_ids.add(hop['edge_id'])
+
+        return {
+            'nodes': {node_id: self.get_node(node_id) for node_id in node_ids},
+            'edges': {edge_id: self.get_edge(edge_id) for edge_id in edge_ids},
+            'paths': paths,
+        }
+
+    def rebuild_typed_adjacency(self):
+        rebuilt = 0
+        for edge_id in self.store.get_edge_keys_generator():
+            edge = self.get_edge(edge_id)
+            if edge is None or self.edge_type(edge) is None:
+                continue
+            self._put_typed_adjacency_for_edge(edge)
+            rebuilt += 1
+        return rebuilt
 
     def get_edge(self, edge_id) -> Edge:
         data = self.store.get_edge(edge_id)
@@ -369,6 +525,8 @@ class GraphDB:
         if not e:
             return  # Edge not found
 
+        self._delete_typed_adjacency_for_edge(e)
+
         # Remove edge_id from adjacency of source
         _source_edge_bytes = edge_key_serializer(e.source)
         self._remove_edge_from_adjacency(_source_edge_bytes, edge_id)
@@ -438,6 +596,9 @@ class GraphDB:
         # adjacency_accumulator_target = {}
 
         for e in edges:
+            old_edge = self.get_edge(e.get_id_bytes)
+            if old_edge is not None:
+                self._delete_typed_adjacency_for_edge(old_edge)
             e_bytes = self.entity_serializer.serialize(e, 'Edge')
             _source = self.node_key_to_bytes(e.source)
             _target = self.node_key_to_bytes(e.target)
@@ -450,6 +611,8 @@ class GraphDB:
             
         # 3) Use the store's put_edges_bulk
         self.store.put_edges_bulk(edge_dict)
+        for e in edges:
+            self._put_typed_adjacency_for_edge(e)
 
 
         # 4) Build adjacency dict so we do one read+write per node
