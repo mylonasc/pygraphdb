@@ -80,6 +80,16 @@ Available extras are `lmdb`, `leveldb`, `msgpack`, `protobuf`, `bloom`, and `all
 
 After installation, import modules through the `pygraphdb` package, for example `pygraphdb.graphdb`, `pygraphdb.kvstores`, and `pygraphdb.serializers`.
 
+# Coverage badge
+
+Regenerate the test coverage badge with:
+
+```sh
+python scripts/update_coverage_badge.py
+```
+
+The script runs `unittest` through `coverage`, computes total coverage for `src/pygraphdb`, and updates `assets/coverage_badge.svg`.
+
 # Example usage
 
 ```python
