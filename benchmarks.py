@@ -1,24 +1,30 @@
-"""Small benchmark suite for PyGraphDB.
+"""Small benchmark suite for PyGraphDB ingestion and typed sampling.
 
-Run with:
+Run examples:
 
-    uv run python benchmarks.py --nodes 10000 --edges 50000
+    python benchmarks.py --backend lmdb --nodes 10000 --edges 50000
+    python benchmarks.py --backend leveldb --nodes 10000 --edges 50000
 
-The benchmarks are intentionally dependency-light and report operations per
-second for common graph workloads. They are not a substitute for production
-profiling, but they provide a repeatable baseline while the engine evolves.
+The benchmark intentionally uses the public API. It is designed to catch large
+performance regressions and compare ingestion modes, not to be a full profiler.
 """
+
+from __future__ import annotations
 
 import argparse
 import random
+import shutil
+import tempfile
 import time
 
-from graphdb import Edge, GraphDB, Node
-from kvstores import InMemoryKVStore
-from serializers import MessagePackSerializer
+from pygraphdb.graphdb import Edge, GraphDB, Node
+from pygraphdb.kvstores import LMDBStore, LevelDBStore
+from pygraphdb.sampling import SamplingHop, SamplingPattern
+from pygraphdb.serializers import PickleSerializer
 
 
 def timed(label, func):
+    """Run a benchmark function and print elapsed time."""
     start = time.perf_counter()
     result = func()
     elapsed = time.perf_counter() - start
@@ -26,84 +32,102 @@ def timed(label, func):
     return result, elapsed
 
 
-def build_graph(num_nodes, num_edges, seed):
-    random.seed(seed)
-    graph = GraphDB(InMemoryKVStore(), MessagePackSerializer())
+def open_graph(backend, path):
+    """Open a graph for the selected benchmark backend."""
+    if backend == "lmdb":
+        return GraphDB(LMDBStore(path=path, map_size=2**34), PickleSerializer())
+    if backend == "leveldb":
+        return GraphDB(LevelDBStore(path=path), PickleSerializer())
+    raise ValueError(f"unknown backend: {backend}")
 
-    def insert_nodes():
-        for index in range(num_nodes):
-            graph.put_node(
-                Node(
-                    f"n{index}",
-                    labels=["Node", f"Group{index % 10}"],
-                    properties={"group": index % 10, "rank": index},
-                )
+
+def make_edges(num_nodes, num_edges, seed):
+    """Create deterministic typed edges for ingestion benchmarks."""
+    rng = random.Random(seed)
+    edge_types = ["drug-to-protein", "protein-to-disease", "drug-to-disease"]
+    edges = []
+    for index in range(num_edges):
+        source = f"n{rng.randrange(num_nodes)}"
+        target = f"n{rng.randrange(num_nodes)}"
+        edge_type = edge_types[index % len(edge_types)]
+        edges.append(
+            Edge(
+                edge_id=f"e{index}",
+                source=source,
+                target=target,
+                properties={"type": edge_type, "weight": index % 100},
             )
-
-    def insert_edges():
-        for index in range(num_edges):
-            source = f"n{random.randrange(num_nodes)}"
-            target = f"n{random.randrange(num_nodes)}"
-            graph.put_edge(
-                Edge(
-                    f"e{index}",
-                    source=source,
-                    target=target,
-                    type=f"T{index % 5}",
-                    properties={"weight": index % 100},
-                )
-            )
-
-    _, node_time = timed(f"insert_nodes ({num_nodes})", insert_nodes)
-    _, edge_time = timed(f"insert_edges ({num_edges})", insert_edges)
-    print(f"node_insert_rate: {num_nodes / node_time:,.0f} ops/s")
-    print(f"edge_insert_rate: {num_edges / edge_time:,.0f} ops/s")
-    return graph
+        )
+    return edges
 
 
-def run_queries(graph, num_nodes, samples, seed):
-    random.seed(seed)
-    sample_nodes = [f"n{random.randrange(num_nodes)}" for _ in range(samples)]
+def chunks(items, chunk_size):
+    """Yield fixed-size chunks from a sequence."""
+    for start in range(0, len(items), chunk_size):
+        yield items[start:start + chunk_size]
 
-    def neighbor_lookup():
-        total = 0
-        for node_id in sample_nodes:
-            total += len(graph.neighbors(node_id, "out"))
-        return total
 
-    def label_lookup():
-        return sum(len(graph.nodes_by_label(f"Group{i}")) for i in range(10))
+def run_benchmark(args):
+    """Run ingestion and sampling benchmarks."""
+    path = tempfile.mkdtemp(prefix=f"pygraphdb_{args.backend}_benchmark_")
+    graph = open_graph(args.backend, path)
+    try:
+        nodes = [Node(node_id=f"n{index}", properties={"group": index % 10}) for index in range(args.nodes)]
+        edges = make_edges(args.nodes, args.edges, args.seed)
 
-    def property_lookup():
-        return sum(len(graph.find_nodes(properties={"group": i})) for i in range(10))
+        _, node_time = timed(
+            f"put_nodes ({args.nodes})",
+            lambda: graph.put_nodes(nodes),
+        )
 
-    def edge_type_lookup():
-        return sum(len(graph.edges_by_type(f"T{i}")) for i in range(5))
+        def insert_edges():
+            for edge_chunk in chunks(edges, args.batch_size):
+                graph.put_edges_bulk(edge_chunk, check_existing=not args.append_only)
 
-    def bfs_lookup():
-        total = 0
-        for node_id in sample_nodes[: max(1, samples // 20)]:
-            total += len(graph.bfs(node_id, direction="out", max_depth=2))
-        return total
+        _, edge_time = timed(
+            f"put_edges_bulk ({args.edges}, batch={args.batch_size}, append_only={args.append_only})",
+            insert_edges,
+        )
 
-    _, neighbor_time = timed(f"neighbor_lookup ({samples})", neighbor_lookup)
-    timed("label_lookup", label_lookup)
-    timed("property_lookup", property_lookup)
-    timed("edge_type_lookup", edge_type_lookup)
-    timed("bfs_depth_2", bfs_lookup)
-    print(f"neighbor_lookup_rate: {samples / neighbor_time:,.0f} ops/s")
+        sample_nodes = [f"n{index}" for index in range(min(args.samples, args.nodes))]
+        pattern = SamplingPattern([
+            SamplingHop("drug-to-protein", direction="out", sample_size=args.sample_size),
+            SamplingHop("protein-to-disease", direction="out", sample_size=args.sample_size),
+        ])
+
+        _, neighbor_time = timed(
+            f"sample_neighbors ({len(sample_nodes)})",
+            lambda: [
+                graph.sample_neighbors(node_id, "drug-to-protein", sample_size=args.sample_size)
+                for node_id in sample_nodes
+            ],
+        )
+        _, path_time = timed(
+            f"sample_typed_paths ({len(sample_nodes)})",
+            lambda: graph.sample_typed_paths(sample_nodes, pattern, rng=random.Random(args.seed)),
+        )
+
+        print(f"node_insert_rate: {args.nodes / node_time:,.0f} nodes/s")
+        print(f"edge_insert_rate: {args.edges / edge_time:,.0f} edges/s")
+        print(f"neighbor_sample_rate: {len(sample_nodes) / neighbor_time:,.0f} seeds/s")
+        print(f"typed_path_sample_rate: {len(sample_nodes) / path_time:,.0f} seeds/s")
+    finally:
+        graph.close()
+        shutil.rmtree(path, ignore_errors=True)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run PyGraphDB benchmarks")
+    """Parse arguments and run benchmarks."""
+    parser = argparse.ArgumentParser(description="Run PyGraphDB ingestion and sampling benchmarks")
+    parser.add_argument("--backend", choices=["lmdb", "leveldb"], default="lmdb")
     parser.add_argument("--nodes", type=int, default=10_000)
     parser.add_argument("--edges", type=int, default=50_000)
-    parser.add_argument("--samples", type=int, default=5_000)
+    parser.add_argument("--batch-size", type=int, default=10_000)
+    parser.add_argument("--samples", type=int, default=1_000)
+    parser.add_argument("--sample-size", type=int, default=5)
     parser.add_argument("--seed", type=int, default=42)
-    args = parser.parse_args()
-
-    graph = build_graph(args.nodes, args.edges, args.seed)
-    run_queries(graph, args.nodes, args.samples, args.seed)
+    parser.add_argument("--append-only", action="store_true", help="skip existing-edge reads during bulk ingestion")
+    run_benchmark(parser.parse_args())
 
 
 if __name__ == "__main__":

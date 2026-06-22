@@ -468,6 +468,63 @@ class TypedTraversalBase(unittest.TestCase):
         self.assertEqual(sample[0]["edge_type"], "drug-to-protein")
         self.assertIn(sample[0]["neighbor_id"], {b"protein-1", b"protein-2"})
 
+    def test_sample_neighbors_streams_typed_adjacency(self):
+        self.populate_typed_graph()
+
+        def fail_materialized_adjacency(*args, **kwargs):
+            raise AssertionError("sample_neighbors should not materialize full typed adjacency")
+
+        self.graph_db.get_typed_adjacency = fail_materialized_adjacency
+
+        sample = self.graph_db.sample_neighbors(
+            "drug-1",
+            "drug-to-protein",
+            direction="out",
+            sample_size=1,
+            rng=random.Random(7),
+        )
+
+        self.assertEqual(len(sample), 1)
+        self.assertEqual(sample[0]["edge_type"], "drug-to-protein")
+
+    def test_put_edges_bulk_append_only_skips_existing_edge_reads(self):
+        for node_id in ["drug-1", "protein-1"]:
+            self.graph_db.put_node(Node(node_id=node_id))
+
+        def fail_get_edge(*args, **kwargs):
+            raise AssertionError("append-only ingestion should skip existing-edge reads")
+
+        self.graph_db.get_edge = fail_get_edge
+
+        self.graph_db.put_edges_bulk(
+            [Edge(edge_id="d1-p1", source="drug-1", target="protein-1", properties={"type": "drug-to-protein"})],
+            check_existing=False,
+        )
+
+        self.assertEqual(
+            self.graph_db.neighbors_by_edge_type("drug-1", "drug-to-protein", direction="out"),
+            [b"protein-1"],
+        )
+
+    def test_put_edges_bulk_uses_bulk_typed_adjacency_writer(self):
+        for node_id in ["drug-1", "protein-1"]:
+            self.graph_db.put_node(Node(node_id=node_id))
+
+        def fail_single_typed_adjacency(*args, **kwargs):
+            raise AssertionError("put_edges_bulk should use put_typed_adjacency_bulk")
+
+        self.graph_db.store.put_typed_adjacency = fail_single_typed_adjacency
+
+        self.graph_db.put_edges_bulk(
+            [Edge(edge_id="d1-p1", source="drug-1", target="protein-1", properties={"type": "drug-to-protein"})],
+            check_existing=False,
+        )
+
+        self.assertEqual(
+            self.graph_db.neighbors_by_edge_type("drug-1", "drug-to-protein", direction="out"),
+            [b"protein-1"],
+        )
+
     def test_sample_typed_paths_respects_edge_type_sequence(self):
         self.populate_typed_graph()
 

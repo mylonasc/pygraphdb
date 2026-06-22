@@ -495,12 +495,28 @@ class GraphDB:
         `out` means source -> target, `in` means target -> source, and `any`
         returns the union of both directions.
         """
+        return list(self.iter_typed_adjacency(node_id, edge_type, direction))
+
+    def iter_typed_adjacency(self, node_id, edge_type: str, direction: str = 'out'):
+        """Yield typed adjacency records with clean direction semantics.
+
+        Args:
+            node_id: Node ID as string or bytes.
+            edge_type: Edge type to traverse.
+            direction: ``"out"``, ``"in"``, or ``"any"``.
+
+        Yields:
+            Typed adjacency records containing edge, neighbor, source, target,
+            edge type, and concrete direction fields.
+
+        Examples:
+            >>> graph_db.iter_typed_adjacency("drug-1", "drug-to-protein")  # doctest: +SKIP
+        """
         if direction not in {'out', 'in', 'any'}:
             raise ValueError("direction must be 'out', 'in', or 'any'")
 
         node_id_bytes = self.node_key_to_bytes(node_id)
         directions = ['out', 'in'] if direction == 'any' else [direction]
-        records = []
         for current_direction in directions:
             for edge_id, neighbor_id in self.store.iter_typed_adjacency(node_id_bytes, edge_type, current_direction):
                 if current_direction == 'out':
@@ -509,15 +525,14 @@ class GraphDB:
                 else:
                     source_id = neighbor_id
                     target_id = node_id_bytes
-                records.append({
+                yield {
                     'edge_id': edge_id,
                     'neighbor_id': neighbor_id,
                     'source_id': source_id,
                     'target_id': target_id,
                     'edge_type': edge_type,
                     'direction': current_direction,
-                })
-        return records
+                }
 
     def neighbors_by_edge_type(self, node_id, edge_type: str, direction: str = 'out'):
         """Return neighbor IDs connected by a specific edge type.
@@ -570,7 +585,7 @@ class GraphDB:
         rng = rng or random
         sample = []
         seen = 0
-        for record in self.get_typed_adjacency(node_id, edge_type, direction):
+        for record in self.iter_typed_adjacency(node_id, edge_type, direction):
             seen += 1
             if len(sample) < sample_size:
                 sample.append(record)
@@ -925,29 +940,37 @@ class GraphDB:
 
         return result
 
-    def put_edges_bulk(self, edges: List[Edge]):
+    def put_edges_bulk(self, edges: List[Edge], check_existing: bool = True):
         """Store multiple edges and update adjacency indexes in bulk.
 
         Args:
             edges: Edges to write.
+            check_existing: When true, read existing edges first and remove stale
+                typed adjacency records before replacement. Set to false for
+                append-only ingestion with new edge IDs.
 
         Examples:
-            >>> graph_db.put_edges_bulk([Edge(source="drug-1", target="protein-1")])  # doctest: +SKIP
+            >>> graph_db.put_edges_bulk([Edge(source="drug-1", target="protein-1")], check_existing=False)  # doctest: +SKIP
         """
         # 1) Build a dict[edge_id, bytes] to store all edges in one go
         edge_dict = {}
+        typed_adjacency_records = []
         # 2) Accumulate adjacency changes in memory: node_id -> set(edge_ids)
         adjacency_accumulator = {} # the keys are "nodes" and the values are sets of edges for where the nodes appear as source or destinations (separately). 
         # adjacency_accumulator_target = {}
 
         for e in edges:
-            old_edge = self.get_edge(e.get_id_bytes)
-            if old_edge is not None:
-                self._delete_typed_adjacency_for_edge(old_edge)
+            if check_existing:
+                old_edge = self.get_edge(e.get_id_bytes)
+                if old_edge is not None:
+                    self._delete_typed_adjacency_for_edge(old_edge)
             e_bytes = self.entity_serializer.serialize(e, 'Edge')
             _source = self.node_key_to_bytes(e.source)
             _target = self.node_key_to_bytes(e.target)
             edge_dict[e.get_id_bytes] = e_bytes
+            edge_type = self.edge_type(e)
+            if edge_type is not None:
+                typed_adjacency_records.append((_source, _target, edge_type, e.get_id_bytes))
             # adjacency accum update
             adjacency_accumulator.setdefault(_source, {'target' : [], 'source' : []})
             adjacency_accumulator[_source]['source'].append(e.get_id_bytes)
@@ -956,8 +979,7 @@ class GraphDB:
             
         # 3) Use the store's put_edges_bulk
         self.store.put_edges_bulk(edge_dict)
-        for e in edges:
-            self._put_typed_adjacency_for_edge(e)
+        self.store.put_typed_adjacency_bulk(typed_adjacency_records)
 
 
         # 4) Build adjacency dict so we do one read+write per node

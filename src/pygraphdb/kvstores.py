@@ -132,6 +132,11 @@ class KVStore:
         """Store typed adjacency records for an edge."""
         raise NotImplementedError
 
+    def put_typed_adjacency_bulk(self, records: list[tuple[bytes, bytes, str, bytes]]):
+        """Store typed adjacency records for multiple edges."""
+        for source_id, target_id, edge_type, edge_id in records:
+            self.put_typed_adjacency(source_id, target_id, edge_type, edge_id)
+
     def delete_typed_adjacency(self, source_id: bytes, target_id: bytes, edge_type: str, edge_id: bytes):
         """Delete typed adjacency records for an edge."""
         raise NotImplementedError
@@ -401,6 +406,13 @@ class LMDBStore(KVStore):
             txn.put(_typed_adjacency_key("out", source_id, edge_type, edge_id), target_id)
             txn.put(_typed_adjacency_key("in", target_id, edge_type, edge_id), source_id)
 
+    def put_typed_adjacency_bulk(self, records: list[tuple[bytes, bytes, str, bytes]]):
+        """Store many typed adjacency records in one transaction."""
+        with self.env.begin(write=True, db=self.typed_adj_db) as txn:
+            for source_id, target_id, edge_type, edge_id in records:
+                txn.put(_typed_adjacency_key("out", source_id, edge_type, edge_id), target_id)
+                txn.put(_typed_adjacency_key("in", target_id, edge_type, edge_id), source_id)
+
     def delete_typed_adjacency(self, source_id: bytes, target_id: bytes, edge_type: str, edge_id: bytes):
         """Delete forward and reverse typed adjacency records."""
         with self.env.begin(write=True, db=self.typed_adj_db) as txn:
@@ -615,6 +627,13 @@ class LevelDBStore(KVStore):
         with self.db_typed_adj.write_batch() as wb:
             wb.put(_typed_adjacency_key("out", source_id, edge_type, edge_id), target_id)
             wb.put(_typed_adjacency_key("in", target_id, edge_type, edge_id), source_id)
+
+    def put_typed_adjacency_bulk(self, records: list[tuple[bytes, bytes, str, bytes]]):
+        """Store many typed adjacency records in one write batch."""
+        with self.db_typed_adj.write_batch() as wb:
+            for source_id, target_id, edge_type, edge_id in records:
+                wb.put(_typed_adjacency_key("out", source_id, edge_type, edge_id), target_id)
+                wb.put(_typed_adjacency_key("in", target_id, edge_type, edge_id), source_id)
 
     def delete_typed_adjacency(self, source_id: bytes, target_id: bytes, edge_type: str, edge_id: bytes):
         """Delete forward and reverse typed adjacency records."""

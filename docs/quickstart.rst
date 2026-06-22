@@ -50,6 +50,13 @@ operation.
    ]
    graph_db.put_edges_bulk(edges)
 
+For append-only ingestion where edge IDs are known to be new, skip replacement
+checks to avoid one existing-edge read per edge:
+
+.. code-block:: python
+
+   graph_db.put_edges_bulk(edges, check_existing=False)
+
 Fetch Nodes in Bulk
 -------------------
 
