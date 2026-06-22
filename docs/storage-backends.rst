@@ -39,6 +39,31 @@ Use ``LevelDBStore`` when you want LevelDB through ``plyvel``.
 installation fails on Python 3.14 or a free-threaded interpreter, create a Python
 3.12 environment and install ``pygraphdb[leveldb]`` there.
 
+RocksDB Backend
+---------------
+
+Use ``PyRexStore`` for RocksDB through the optional ``pyrex-rocksdb`` package.
+This backend uses one physical RocksDB database with prefixed keys and exposes
+several RocksDB tuning knobs.
+
+.. code-block:: python
+
+   from pygraphdb.graphdb import GraphDB
+   from pygraphdb.kvstores import PyRexStore
+   from pygraphdb.serializers import PickleSerializer
+
+   store = PyRexStore(
+       path="graph_rocksdb",
+       parallelism=4,
+       max_background_jobs=4,
+       write_buffer_size=64 * 1024 * 1024,
+       bloom_bits_per_key=10,
+   )
+   graph_db = GraphDB(store, PickleSerializer())
+
+``disable_wal=True`` can be useful for bulk-loading experiments, but it weakens
+durability and should not be used as a safe default.
+
 Backend Selection Pattern
 -------------------------
 
@@ -47,7 +72,7 @@ Backend Selection Pattern
    from pathlib import Path
 
    from pygraphdb.graphdb import GraphDB
-   from pygraphdb.kvstores import LMDBStore, LevelDBStore
+   from pygraphdb.kvstores import LMDBStore, LevelDBStore, PyRexStore
    from pygraphdb.serializers import PickleSerializer
 
    def open_graph(path: str, backend: str = "lmdb") -> GraphDB:
@@ -56,6 +81,8 @@ Backend Selection Pattern
            store = LMDBStore(path=path, map_size=2**30)
        elif backend == "leveldb":
            store = LevelDBStore(path=path)
+       elif backend == "rocksdb":
+           store = PyRexStore(path=path)
        else:
            raise ValueError(f"unknown backend: {backend}")
        return GraphDB(store, PickleSerializer())

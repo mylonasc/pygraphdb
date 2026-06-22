@@ -656,6 +656,235 @@ class LevelDBStore(KVStore):
         self.db_edges.close()
         self.db_nodes.close()
 
+
+class PyRexStore(KVStore):
+    """RocksDB implementation backed by ``pyrex-rocksdb``.
+
+    ``PyRexStore`` uses one physical RocksDB database with prefixed keys instead
+    of separate databases. This lets node, edge, adjacency, and typed adjacency
+    records share RocksDB's write path and makes it possible to benchmark
+    RocksDB tuning options against the existing LevelDB backend.
+
+    Args:
+        path: Directory for the RocksDB database.
+        parallelism: Optional number of RocksDB background threads.
+        max_background_jobs: Optional RocksDB background job limit.
+        write_buffer_size: Optional write buffer size in bytes.
+        bloom_bits_per_key: Optional block-based Bloom filter bits per key.
+        disable_wal: Disable RocksDB's write-ahead log for faster but less
+            durable ingestion benchmarks.
+
+    Examples:
+        >>> store = PyRexStore(path="/tmp/example_graph_rocksdb")  # doctest: +SKIP
+    """
+
+    _SEP = b"\x1f"
+
+    def __init__(
+        self,
+        path="graph_rocksdb",
+        parallelism=None,
+        max_background_jobs=None,
+        write_buffer_size=None,
+        bloom_bits_per_key=None,
+        disable_wal=False,
+    ):
+        """Open a PyRex/RocksDB store with optional tuning settings."""
+        try:
+            import pyrex
+        except ImportError as exc:
+            raise _missing_dependency_error("pyrex", install_name="pyrex-rocksdb", feature_name="PyRexStore") from exc
+
+        options = pyrex.PyOptions()
+        options.create_if_missing = True
+        if parallelism is not None:
+            options.increase_parallelism(parallelism)
+        if max_background_jobs is not None:
+            options.max_background_jobs = max_background_jobs
+        if write_buffer_size is not None:
+            options.write_buffer_size = write_buffer_size
+            options.cf_write_buffer_size = write_buffer_size
+        if bloom_bits_per_key is not None:
+            options.use_block_based_bloom_filter(bloom_bits_per_key)
+
+        self._pyrex = pyrex
+        self.db = pyrex.PyRocksDB(path, options)
+        self.write_options = pyrex.WriteOptions()
+        self.write_options.disable_wal = disable_wal
+
+    def _key(self, prefix: bytes, key: bytes) -> bytes:
+        """Build a prefixed RocksDB key."""
+        return prefix + self._SEP + key
+
+    def _typed_key(self, direction: str, node_id: bytes, edge_type: str, edge_id: bytes = b"") -> bytes:
+        """Build a typed adjacency key in the shared RocksDB keyspace."""
+        return self._SEP.join([b"T", direction.encode("utf-8"), node_id, edge_type.encode("utf-8"), edge_id])
+
+    def _iter_prefixed_keys(self, prefix: bytes, key_offset=None, limit=None):
+        """Yield unprefixed keys for a prefixed key range."""
+        yielded = 0
+        start_key = prefix if key_offset is None else prefix + key_offset
+        iterator = self.db.new_iterator()
+        iterator.seek(start_key)
+        while iterator.valid():
+            key = iterator.key()
+            if not key.startswith(prefix):
+                break
+            yield key[len(prefix):]
+            yielded += 1
+            if limit is not None and yielded == limit:
+                break
+            iterator.next()
+        iterator.check_status()
+
+    def put(self, key: bytes, value: bytes):
+        """Store a raw key/value pair in the shared RocksDB keyspace."""
+        self.db.put(key, value, self.write_options)
+
+    def get(self, key: bytes) -> bytes:
+        """Return a raw value by key."""
+        return self.db.get(key)
+
+    def delete(self, key: bytes):
+        """Delete a raw key/value pair."""
+        self.db.delete(key, self.write_options)
+
+    def range_iter(self, start_key: bytes, end_key: bytes):
+        """Yield raw records whose keys fall within an inclusive range."""
+        iterator = self.db.new_iterator()
+        iterator.seek(start_key)
+        while iterator.valid():
+            key = iterator.key()
+            if key > end_key:
+                break
+            yield key, iterator.value()
+            iterator.next()
+        iterator.check_status()
+
+    def close(self):
+        """Close the RocksDB database."""
+        self.db.close()
+
+    def put_node(self, node_id: bytes, value: bytes):
+        """Store a serialized node by byte key."""
+        self.db.put(self._key(b"N", node_id), value, self.write_options)
+
+    def get_node(self, node_id: bytes) -> bytes:
+        """Return serialized node bytes by key, or ``None``."""
+        return self.db.get(self._key(b"N", node_id))
+
+    def delete_node(self, node_id: bytes):
+        """Delete a node by byte key."""
+        self.db.delete(self._key(b"N", node_id), self.write_options)
+
+    def put_nodes_bulk(self, keys_and_values: dict[bytes, bytes]):
+        """Store many serialized nodes in one RocksDB write batch."""
+        batch = self._pyrex.PyWriteBatch()
+        for node_id, value in keys_and_values.items():
+            batch.put(self._key(b"N", node_id), value)
+        self.db.write(batch, self.write_options)
+
+    def get_nodes_bulk(self, node_ids: list[bytes]) -> dict[bytes, bytes]:
+        """Return serialized nodes for the requested keys."""
+        results = {}
+        for node_id in node_ids:
+            data = self.get_node(node_id)
+            if data is not None:
+                results[node_id] = data
+        return results
+
+    def put_edge(self, edge_id: bytes, value: bytes):
+        """Store a serialized edge by byte key."""
+        self.db.put(self._key(b"E", edge_id), value, self.write_options)
+
+    def get_edge(self, edge_id: bytes) -> bytes:
+        """Return serialized edge bytes by key, or ``None``."""
+        return self.db.get(self._key(b"E", edge_id))
+
+    def delete_edge(self, edge_id: bytes):
+        """Delete an edge by byte key."""
+        self.db.delete(self._key(b"E", edge_id), self.write_options)
+
+    def put_edges_bulk(self, keys_and_values: dict[bytes, bytes]):
+        """Store many serialized edges in one RocksDB write batch."""
+        batch = self._pyrex.PyWriteBatch()
+        for edge_id, value in keys_and_values.items():
+            batch.put(self._key(b"E", edge_id), value)
+        self.db.write(batch, self.write_options)
+
+    def get_edges_bulk(self, edge_ids: list[bytes]) -> dict[bytes, bytes]:
+        """Return serialized edges for the requested keys."""
+        results = {}
+        for edge_id in edge_ids:
+            data = self.get_edge(edge_id)
+            if data is not None:
+                results[edge_id] = data
+        return results
+
+    def get_edge_keys_generator(self, num_edges=None, key_offset=None):
+        """Yield edge keys from the shared RocksDB keyspace."""
+        yield from self._iter_prefixed_keys(b"E" + self._SEP, key_offset=key_offset, limit=num_edges)
+
+    def get_node_keys_generator(self, num_nodes=None, key_offset=None):
+        """Yield node keys from the shared RocksDB keyspace."""
+        yield from self._iter_prefixed_keys(b"N" + self._SEP, key_offset=key_offset, limit=num_nodes)
+
+    def put_adjacency(self, node_id: bytes, value: bytes) -> None:
+        """Store a serialized adjacency list for a node."""
+        self.db.put(self._key(b"A", node_id), value, self.write_options)
+
+    def get_adjacency(self, node_id: bytes) -> Optional[bytes]:
+        """Return a serialized adjacency list for a node."""
+        return self.db.get(self._key(b"A", node_id))
+
+    def put_adjacency_bulk(self, adj_dict: Dict[bytes, bytes]) -> None:
+        """Store many serialized adjacency lists in one RocksDB write batch."""
+        batch = self._pyrex.PyWriteBatch()
+        for node_id, value in adj_dict.items():
+            batch.put(self._key(b"A", node_id), value)
+        self.db.write(batch, self.write_options)
+
+    def get_adjacency_bulk(self, node_ids: List[bytes]) -> Dict[bytes, bytes]:
+        """Return serialized adjacency lists for the requested nodes."""
+        results = {}
+        for node_id in node_ids:
+            data = self.get_adjacency(node_id)
+            if data is not None:
+                results[node_id] = data
+        return results
+
+    def put_typed_adjacency(self, source_id: bytes, target_id: bytes, edge_type: str, edge_id: bytes):
+        """Store forward and reverse typed adjacency records."""
+        self.put_typed_adjacency_bulk([(source_id, target_id, edge_type, edge_id)])
+
+    def put_typed_adjacency_bulk(self, records: list[tuple[bytes, bytes, str, bytes]]):
+        """Store many typed adjacency records in one RocksDB write batch."""
+        batch = self._pyrex.PyWriteBatch()
+        for source_id, target_id, edge_type, edge_id in records:
+            batch.put(self._typed_key("out", source_id, edge_type, edge_id), target_id)
+            batch.put(self._typed_key("in", target_id, edge_type, edge_id), source_id)
+        self.db.write(batch, self.write_options)
+
+    def delete_typed_adjacency(self, source_id: bytes, target_id: bytes, edge_type: str, edge_id: bytes):
+        """Delete forward and reverse typed adjacency records."""
+        batch = self._pyrex.PyWriteBatch()
+        batch.delete(self._typed_key("out", source_id, edge_type, edge_id))
+        batch.delete(self._typed_key("in", target_id, edge_type, edge_id))
+        self.db.write(batch, self.write_options)
+
+    def iter_typed_adjacency(self, node_id: bytes, edge_type: str, direction: str = "out"):
+        """Yield typed adjacency ``(edge_id, neighbor_id)`` pairs."""
+        prefix = self._typed_key(direction, node_id, edge_type)
+        iterator = self.db.new_iterator()
+        iterator.seek(prefix)
+        while iterator.valid():
+            key = iterator.key()
+            if not key.startswith(prefix):
+                break
+            yield key[len(prefix):], iterator.value()
+            iterator.next()
+        iterator.check_status()
+
 class SimpleIndexCounterKVStore:
     """This is to help with lowering storage requirements 
     for edge and node keys, by casting them to long ints. 

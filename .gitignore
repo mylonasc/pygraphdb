@@ -11,6 +11,7 @@ __pycache__/
 .coverage.*
 htmlcov/
 docs/_build/
+benchmark_results/
 .ipynb_checkpoints/
 graph_lmdb*/
 graph_leveldb*/

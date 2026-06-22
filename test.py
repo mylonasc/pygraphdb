@@ -2,13 +2,14 @@
 
 import sys
 sys.path.append('./src')
-from pygraphdb.kvstores import LevelDBStore, LMDBStore
+from pygraphdb.kvstores import LevelDBStore, LMDBStore, PyRexStore
 from pygraphdb.sampling import SamplingHop, SamplingPattern
 from pygraphdb.serializers import JSONSerializer, MessagePackSerializer, PickleSerializer, ProtobufSerializer
 from pygraphdb.graphdb import GraphDB, Node, Edge
 
 import builtins
 from contextlib import contextmanager
+import importlib.util
 import random
 import shutil
 import tempfile
@@ -47,6 +48,14 @@ class OptionalDependencyTests(unittest.TestCase):
     def test_leveldb_store_reports_missing_plyvel_when_used(self):
         with blocked_import("plyvel"):
             self.assert_missing_dependency_error(lambda: LevelDBStore(), "plyvel")
+
+    def test_pyrex_store_reports_missing_pyrex_when_used(self):
+        with blocked_import("pyrex"):
+            with self.assertRaisesRegex(
+                ImportError,
+                "Missing optional dependency 'pyrex'.*python -m pip install pyrex-rocksdb.*uv add pyrex-rocksdb",
+            ):
+                PyRexStore()
 
     def test_messagepack_serializer_reports_missing_msgpack_when_used(self):
         with blocked_import("msgpack"):
@@ -587,6 +596,12 @@ class TestTypedTraversalWithLevelDB(TypedTraversalBase):
     def get_store(self, path: str):
         return LevelDBStore(path=path)
 
+
+@unittest.skipIf(importlib.util.find_spec("pyrex") is None, "pyrex not installed")
+class TestTypedTraversalWithPyRex(TypedTraversalBase):
+    def get_store(self, path: str):
+        return PyRexStore(path=path)
+
 class TestGraphDBWithLMDB(AbstractGraphDBBase):
     def get_store(self, path: str):
         # Return LMDBStore pointing to a temporary directory.
@@ -597,6 +612,12 @@ class TestGraphDBWithLevelDB(AbstractGraphDBBase):
     def get_store(self, path: str):
         # Return LevelDBStore pointing to a temporary directory.
         return LevelDBStore(path=path)
+
+
+@unittest.skipIf(importlib.util.find_spec("pyrex") is None, "pyrex not installed")
+class TestGraphDBWithPyRex(AbstractGraphDBBase):
+    def get_store(self, path: str):
+        return PyRexStore(path=path)
 
 
 if __name__ == "__main__":

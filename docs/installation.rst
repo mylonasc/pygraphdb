@@ -80,6 +80,9 @@ Optional Dependencies
 ``leveldb``
    LevelDB key-value backend through ``plyvel``.
 
+``rocksdb``
+   RocksDB key-value backend through ``pyrex-rocksdb``.
+
 ``msgpack``
    MessagePack serializer.
 

@@ -4,6 +4,7 @@ Run examples:
 
     python benchmarks.py --backend lmdb --nodes 10000 --edges 50000
     python benchmarks.py --backend leveldb --nodes 10000 --edges 50000
+    python benchmarks.py --backend rocksdb --nodes 10000 --edges 50000 --rocksdb-bloom-bits 10
 
 The benchmark intentionally uses the public API. It is designed to catch large
 performance regressions and compare ingestion modes, not to be a full profiler.
@@ -18,7 +19,7 @@ import tempfile
 import time
 
 from pygraphdb.graphdb import Edge, GraphDB, Node
-from pygraphdb.kvstores import LMDBStore, LevelDBStore
+from pygraphdb.kvstores import LMDBStore, LevelDBStore, PyRexStore
 from pygraphdb.sampling import SamplingHop, SamplingPattern
 from pygraphdb.serializers import PickleSerializer
 
@@ -32,13 +33,25 @@ def timed(label, func):
     return result, elapsed
 
 
-def open_graph(backend, path):
+def open_graph(args, path):
     """Open a graph for the selected benchmark backend."""
-    if backend == "lmdb":
+    if args.backend == "lmdb":
         return GraphDB(LMDBStore(path=path, map_size=2**34), PickleSerializer())
-    if backend == "leveldb":
+    if args.backend == "leveldb":
         return GraphDB(LevelDBStore(path=path), PickleSerializer())
-    raise ValueError(f"unknown backend: {backend}")
+    if args.backend == "rocksdb":
+        return GraphDB(
+            PyRexStore(
+                path=path,
+                parallelism=args.rocksdb_parallelism,
+                max_background_jobs=args.rocksdb_max_background_jobs,
+                write_buffer_size=args.rocksdb_write_buffer_size,
+                bloom_bits_per_key=args.rocksdb_bloom_bits,
+                disable_wal=args.rocksdb_disable_wal,
+            ),
+            PickleSerializer(),
+        )
+    raise ValueError(f"unknown backend: {args.backend}")
 
 
 def make_edges(num_nodes, num_edges, seed):
@@ -70,7 +83,7 @@ def chunks(items, chunk_size):
 def run_benchmark(args):
     """Run ingestion and sampling benchmarks."""
     path = tempfile.mkdtemp(prefix=f"pygraphdb_{args.backend}_benchmark_")
-    graph = open_graph(args.backend, path)
+    graph = open_graph(args, path)
     try:
         nodes = [Node(node_id=f"n{index}", properties={"group": index % 10}) for index in range(args.nodes)]
         edges = make_edges(args.nodes, args.edges, args.seed)
@@ -119,7 +132,7 @@ def run_benchmark(args):
 def main():
     """Parse arguments and run benchmarks."""
     parser = argparse.ArgumentParser(description="Run PyGraphDB ingestion and sampling benchmarks")
-    parser.add_argument("--backend", choices=["lmdb", "leveldb"], default="lmdb")
+    parser.add_argument("--backend", choices=["lmdb", "leveldb", "rocksdb"], default="lmdb")
     parser.add_argument("--nodes", type=int, default=10_000)
     parser.add_argument("--edges", type=int, default=50_000)
     parser.add_argument("--batch-size", type=int, default=10_000)
@@ -127,6 +140,11 @@ def main():
     parser.add_argument("--sample-size", type=int, default=5)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--append-only", action="store_true", help="skip existing-edge reads during bulk ingestion")
+    parser.add_argument("--rocksdb-parallelism", type=int, default=None)
+    parser.add_argument("--rocksdb-max-background-jobs", type=int, default=None)
+    parser.add_argument("--rocksdb-write-buffer-size", type=int, default=None)
+    parser.add_argument("--rocksdb-bloom-bits", type=float, default=None)
+    parser.add_argument("--rocksdb-disable-wal", action="store_true")
     run_benchmark(parser.parse_args())
 
 

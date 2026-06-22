@@ -78,7 +78,7 @@ python -m pip install "/path/to/pygraphdb[lmdb,msgpack,protobuf]"
 python -m pip install "pygraphdb[all] @ git+https://github.com/mylonasc/pygraphdb.git"
 ```
 
-Available extras are `lmdb`, `leveldb`, `msgpack`, `protobuf`, `bloom`, and `all`. Optional packages are imported only when the corresponding backend or serializer is used. If one is missing, PyGraphDB raises an error naming the missing package and the install command.
+Available extras are `lmdb`, `leveldb`, `rocksdb`, `msgpack`, `protobuf`, `bloom`, and `all`. Optional packages are imported only when the corresponding backend or serializer is used. If one is missing, PyGraphDB raises an error naming the missing package and the install command.
 
 After installation, import modules through the `pygraphdb` package, for example `pygraphdb.graphdb`, `pygraphdb.kvstores`, and `pygraphdb.serializers`.
 
