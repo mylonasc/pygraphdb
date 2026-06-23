@@ -455,6 +455,18 @@ wheels = [
 ]
 
 [[package]]
+name = "google"
+version = "3.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "beautifulsoup4" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/89/97/b49c69893cddea912c7a660a4b6102c6b02cd268f8c7162dd70b7c16f753/google-3.0.0.tar.gz", hash = "sha256:143530122ee5130509ad5e989f0512f7cb218b2d4eddbafbad40fd10e8d8ccbe", size = 44978, upload-time = "2020-07-11T14:50:45.678Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ac/35/17c9141c4ae21e9a29a43acdfd848e3e468a810517f862cad07977bf8fe9/google-3.0.0-py2.py3-none-any.whl", hash = "sha256:889cf695f84e4ae2c55fbc0cfdaf4c1e729417fa52ab1db0485202ba173e4935", size = 45258, upload-time = "2020-07-11T14:49:58.287Z" },
+]
+
+[[package]]
 name = "idna"
 version = "3.18"
 source = { registry = "https://pypi.org/simple" }
@@ -1128,7 +1140,12 @@ name = "pygraphdb"
 version = "0.2.0a0"
 source = { editable = "." }
 dependencies = [
+    { name = "google" },
+    { name = "msgpack", version = "1.1.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "msgpack", version = "1.2.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "plyvel" },
+    { name = "protobuf", version = "6.33.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "protobuf", version = "7.35.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
 ]
 
 [package.optional-dependencies]
@@ -1234,9 +1251,11 @@ requires-dist = [
     { name = "coverage", marker = "extra == 'dev'" },
     { name = "furo", marker = "extra == 'dev'" },
     { name = "furo", marker = "extra == 'docs'" },
+    { name = "google", specifier = ">=3.0.0" },
     { name = "lmdb", marker = "extra == 'all'" },
     { name = "lmdb", marker = "extra == 'dev'" },
     { name = "lmdb", marker = "extra == 'lmdb'" },
+    { name = "msgpack", specifier = ">=1.1.2" },
     { name = "msgpack", marker = "extra == 'all'" },
     { name = "msgpack", marker = "extra == 'dev'" },
     { name = "msgpack", marker = "extra == 'msgpack'" },
@@ -1250,6 +1269,7 @@ requires-dist = [
     { name = "polars", marker = "extra == 'dev'" },
     { name = "polars", marker = "extra == 'fast-ingest'" },
     { name = "polars", marker = "extra == 'polars'" },
+    { name = "protobuf", specifier = ">=6.33.6" },
     { name = "protobuf", marker = "extra == 'all'" },
     { name = "protobuf", marker = "extra == 'dev'" },
     { name = "protobuf", marker = "extra == 'protobuf'" },
