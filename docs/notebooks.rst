@@ -4,6 +4,15 @@ Notebook Usage
 The repository includes notebooks under ``notebooks/``. They use the same public
 APIs described in this documentation.
 
+Available notebooks include:
+
+- ``01_graphdb_basics.ipynb`` for core node and edge operations.
+- ``02_loading_large_graph.ipynb`` for bulk graph loading patterns.
+- ``03_property_graph_api.ipynb`` for attributed property graph usage.
+- ``04_typed_path_sampling.ipynb`` for typed traversal and sampling.
+- ``05_columnar_ingestion_benchmark.ipynb`` for Arrow/Polars columnar ingestion
+  compared with LevelDB object batch ingestion.
+
 Choose the Correct Kernel
 -------------------------
 

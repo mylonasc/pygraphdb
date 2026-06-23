@@ -28,8 +28,9 @@ Install optional features only when you need them:
 
 .. code-block:: sh
 
-   uv add "/path/to/pygraphdb[lmdb,msgpack,protobuf]"
-   uv add "/path/to/pygraphdb[leveldb]"
+    uv add "/path/to/pygraphdb[lmdb,msgpack,protobuf]"
+    uv add "/path/to/pygraphdb[leveldb]"
+    uv add "/path/to/pygraphdb[fast-ingest]"
 
 Install With pip
 ----------------
@@ -47,6 +48,8 @@ Install optional backends and serializers:
 
    python -m pip install ".[lmdb]"
    python -m pip install ".[leveldb]"
+   python -m pip install ".[rocksdb]"
+   python -m pip install ".[fast-ingest]"
    python -m pip install ".[msgpack,protobuf]"
    python -m pip install ".[all]"
 
@@ -81,7 +84,17 @@ Optional Dependencies
    LevelDB key-value backend through ``plyvel``.
 
 ``rocksdb``
-   RocksDB key-value backend through ``pyrex-rocksdb``.
+   RocksDB key-value backend through ``pyrex-rocksdb>=0.3.0a0``.
+
+``arrow``
+   Arrow array support through ``pyarrow`` for columnar ingestion helpers.
+
+``polars``
+   Polars DataFrame support for columnar ingestion helpers.
+
+``fast-ingest``
+   Convenience extra for ``pyarrow``, ``polars``, and
+   ``pyrex-rocksdb>=0.3.0a0``.
 
 ``msgpack``
    MessagePack serializer.
@@ -93,4 +106,15 @@ Optional Dependencies
    Bloom-filter support through ``pybloom-live``.
 
 ``docs``
-   Sphinx documentation build dependencies.
+    Sphinx documentation build dependencies.
+
+Pre-Release Installs
+--------------------
+
+Alpha releases use standard Python pre-release versions, for example
+``0.2.0a0``. If a stable release with the same base version exists in the
+future, install alpha builds explicitly:
+
+.. code-block:: sh
+
+   python -m pip install --pre "pygraphdb[fast-ingest]"

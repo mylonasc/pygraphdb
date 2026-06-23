@@ -39,6 +39,7 @@ Install optional backends or serializers only when you need them:
 
 ```sh
 uv add "/path/to/pygraphdb[lmdb,msgpack,protobuf]"
+uv add "/path/to/pygraphdb[fast-ingest]"
 uv add "git+https://github.com/mylonasc/pygraphdb.git#egg=pygraphdb[all]"
 ```
 
@@ -75,10 +76,11 @@ Install optional backends or serializers only when you need them:
 
 ```sh
 python -m pip install "/path/to/pygraphdb[lmdb,msgpack,protobuf]"
+python -m pip install "/path/to/pygraphdb[fast-ingest]"
 python -m pip install "pygraphdb[all] @ git+https://github.com/mylonasc/pygraphdb.git"
 ```
 
-Available extras are `lmdb`, `leveldb`, `rocksdb`, `msgpack`, `protobuf`, `bloom`, and `all`. Optional packages are imported only when the corresponding backend or serializer is used. If one is missing, PyGraphDB raises an error naming the missing package and the install command.
+Available extras are `lmdb`, `leveldb`, `rocksdb`, `arrow`, `polars`, `fast-ingest`, `msgpack`, `protobuf`, `bloom`, `docs`, `coverage`, `dev`, and `all`. Optional packages are imported only when the corresponding backend, serializer, or ingestion helper is used. If one is missing, PyGraphDB raises an error naming the missing package and the install command.
 
 After installation, import modules through the `pygraphdb` package, for example `pygraphdb.graphdb`, `pygraphdb.kvstores`, and `pygraphdb.serializers`.
 
@@ -189,3 +191,46 @@ graph_db.sample_typed_paths(seed_ids, pattern)
 graph_db.sample_typed_subgraph(seed_ids, pattern)
 graph_db.rebuild_typed_adjacency()
 ```
+
+# Columnar ingestion
+
+Version `0.2.0a0` adds serialized Arrow/Polars-style columnar ingestion for attributed nodes and typed edges. The first implementation requires caller-provided serialized `node_value` and `edge_value` payloads so `get_node` and `get_edge` continue to use the configured serializer without a migration step.
+
+With `PyRexStore` and `pyrex-rocksdb>=0.3.0a0`, these APIs use PyRex's native `write_columnar_batch` method when available. LMDB, LevelDB, and older PyRex runtimes use the existing Python bulk-write fallback.
+
+```python
+from pygraphdb.graphdb import Edge, GraphDB, Node
+from pygraphdb.kvstores import PyRexStore
+from pygraphdb.serializers import PickleSerializer
+
+graph_db = GraphDB(PyRexStore(path="graph_rocksdb"), PickleSerializer())
+
+nodes = [
+    Node(node_id="drug-1", properties={"kind": "drug"}),
+    Node(node_id="protein-1", properties={"kind": "protein"}),
+]
+graph_db.ingest_nodes_arrow(
+    [node.get_id for node in nodes],
+    [graph_db.serialize_node_value(node) for node in nodes],
+)
+
+edge = Edge(
+    edge_id="d1-p1",
+    source="drug-1",
+    target="protein-1",
+    properties={"type": "drug-to-protein", "score": 0.9},
+)
+graph_db.ingest_edges_arrow(
+    [edge.get_id],
+    [edge.source],
+    [edge.target],
+    [edge.get_type],
+    [graph_db.serialize_edge_value(edge)],
+    append_only=True,
+)
+
+graph_db.neighbors_by_edge_type("drug-1", "drug-to-protein")
+graph_db.close()
+```
+
+Polars users can call `ingest_nodes_polars` and `ingest_edges_polars` with binary `node_value` and `edge_value` columns. See `notebooks/05_columnar_ingestion_benchmark.ipynb` for a runnable comparison against LevelDB object-batch ingestion.

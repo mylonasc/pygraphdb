@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pygraphdb"
-version = "0.1.0"
+version = "0.2.0a0"
 description = "A pure Python GraphDB for attributed graphs."
 readme = "README.md"
 requires-python = ">=3.9,<3.14"
@@ -20,9 +20,12 @@ protobuf = ["protobuf"]
 bloom = ["pybloom-live"]
 coverage = ["coverage"]
 docs = ["furo", "myst-parser", "sphinx"]
-rocksdb = ["pyrex-rocksdb"]
-all = ["lmdb", "msgpack", "plyvel", "protobuf", "pybloom-live", "pyrex-rocksdb"]
-dev = ["coverage", "furo", "lmdb", "msgpack", "myst-parser", "plyvel", "protobuf", "pybloom-live", "pyrex-rocksdb", "sphinx"]
+rocksdb = ["pyrex-rocksdb>=0.3.0a0"]
+arrow = ["pyarrow"]
+polars = ["polars", "pyarrow"]
+fast-ingest = ["pyarrow", "polars", "pyrex-rocksdb>=0.3.0a0"]
+all = ["lmdb", "msgpack", "plyvel", "protobuf", "pybloom-live", "pyrex-rocksdb>=0.3.0a0", "pyarrow", "polars"]
+dev = ["coverage", "furo", "lmdb", "msgpack", "myst-parser", "plyvel", "protobuf", "pybloom-live", "pyrex-rocksdb>=0.3.0a0", "pyarrow", "polars", "sphinx"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

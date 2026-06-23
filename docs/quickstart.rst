@@ -66,6 +66,45 @@ Fetch Nodes in Bulk
    for node in fetched:
        print(None if node is None else node.get_id)
 
+Columnar Ingestion
+------------------
+
+``ingest_nodes_arrow`` and ``ingest_edges_arrow`` accept Arrow-like columns or
+plain Python sequences. The first implementation requires caller-provided
+serialized ``node_value`` and ``edge_value`` payloads so existing serializer
+behavior remains unchanged.
+
+.. code-block:: python
+
+   nodes = [
+       Node(node_id="drug-1", properties={"kind": "drug"}),
+       Node(node_id="protein-1", properties={"kind": "protein"}),
+   ]
+   graph_db.ingest_nodes_arrow(
+       [node.get_id for node in nodes],
+       [graph_db.serialize_node_value(node) for node in nodes],
+   )
+
+   edge = Edge(
+       edge_id="d1-p1",
+       source="drug-1",
+       target="protein-1",
+       properties={"type": "drug-to-protein", "score": 0.9},
+   )
+   graph_db.ingest_edges_arrow(
+       [edge.get_id],
+       [edge.source],
+       [edge.target],
+       [edge.get_type],
+       [graph_db.serialize_edge_value(edge)],
+       append_only=True,
+   )
+
+Polars users can use ``ingest_nodes_polars`` and ``ingest_edges_polars`` with
+``node_value`` and ``edge_value`` binary columns. With ``PyRexStore`` and
+``pyrex-rocksdb>=0.3.0a0``, these methods use native RocksDB columnar batch
+writes when available. Other stores use the Python bulk fallback.
+
 Traverse With BFS
 -----------------
 

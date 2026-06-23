@@ -64,6 +64,12 @@ several RocksDB tuning knobs.
 ``disable_wal=True`` can be useful for bulk-loading experiments, but it weakens
 durability and should not be used as a safe default.
 
+When installed with ``pyrex-rocksdb>=0.3.0a0``, ``PyRexStore`` can use PyRex's
+native ``write_columnar_batch`` API through ``GraphDB.ingest_nodes_arrow`` and
+``GraphDB.ingest_edges_arrow``. The columnar methods currently require
+caller-provided serialized ``node_value`` and ``edge_value`` payloads and edge
+ingestion is append-only.
+
 Backend Selection Pattern
 -------------------------
 

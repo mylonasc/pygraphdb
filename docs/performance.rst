@@ -9,7 +9,7 @@ Install Optional Dependencies
 
 .. code-block:: sh
 
-   python -m pip install -e ".[leveldb,rocksdb]"
+   python -m pip install -e ".[leveldb,rocksdb,fast-ingest]"
 
 Run Backend Benchmarks
 ----------------------
@@ -29,6 +29,38 @@ Run a small RocksDB tuning matrix against the LevelDB baseline:
 .. code-block:: sh
 
    python scripts/tune_rocksdb.py --nodes 20000 --edges 100000 --batch-size 10000
+
+Columnar Ingestion Benchmark
+----------------------------
+
+PyGraphDB ``0.2.0a0`` adds serialized Arrow/Polars columnar ingestion for
+attributed nodes and typed edges. With ``PyRexStore`` and
+``pyrex-rocksdb>=0.3.0a0``, the store uses PyRex's native
+``write_columnar_batch`` API when available.
+
+The new APIs require caller-provided serialized ``node_value`` and
+``edge_value`` payload columns. This keeps ``get_node`` and ``get_edge``
+compatible with the configured serializer and avoids a storage-format migration.
+Edge columnar ingestion is append-only in this first release and writes edge
+records plus typed adjacency records; it intentionally skips legacy adjacency
+blob rewrites.
+
+See ``notebooks/05_columnar_ingestion_benchmark.ipynb`` for a runnable
+comparison. A local run on ``10,000`` nodes and ``50,000`` edges with batch size
+``10,000`` produced:
+
+============================== =============== ================
+Mode                           Node rate       Edge insert rate
+============================== =============== ================
+LevelDB object batch           1,110,296/s     167,463 edges/s
+RocksDB Arrow columnar native  1,035,690/s     265,050 edges/s
+RocksDB Polars columnar native 929,044/s       250,517 edges/s
+============================== =============== ================
+
+The edge-ingestion speedup was roughly ``1.5x`` to ``1.6x`` over the LevelDB
+object-batch baseline for this small benchmark. Larger append-only workloads
+with already-serialized columnar payloads are expected to benefit more because
+the native path avoids per-row backend batch calls.
 
 Initial Local Findings
 ----------------------

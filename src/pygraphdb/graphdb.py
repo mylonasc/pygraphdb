@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 import datetime
 import struct
 
+from .ingestion import EdgeList, NodeList
 from .sampling import SamplingPattern, as_sampling_pattern
 
 def datetime_to_bytes(dt: datetime.datetime, tzinfo = datetime.timezone.utc) -> bytes:
@@ -781,6 +782,53 @@ class GraphDB:
             to_store[n.get_id_bytes] = self.entity_serializer.serialize(n, 'Node')
         self.store.put_nodes_bulk(to_store)
 
+    def ingest_nodes_arrow(self, node_ids, node_values, *, native: bool = True, chunk_size: int = 100_000):
+        """Ingest attributed nodes from Arrow-like columns.
+
+        ``node_values`` is required and must contain serialized node payloads
+        compatible with the current ``GraphDB`` serializer.
+
+        Args:
+            node_ids: Arrow-like or Python column of node IDs.
+            node_values: Arrow-like or Python column of serialized node bytes.
+            native: Use native backend columnar ingestion when available.
+            chunk_size: Maximum rows per backend write.
+
+        Returns:
+            Number of ingested nodes.
+        """
+        node_list = NodeList.from_arrow(node_ids, node_values)
+        for chunk in node_list.chunks(chunk_size):
+            self.store.ingest_nodes_columnar(chunk, native=native)
+        return len(node_list.node_ids)
+
+    def ingest_nodes_polars(
+        self,
+        df,
+        *,
+        node_id: str = "node_id",
+        node_value: str = "node_value",
+        native: bool = True,
+        chunk_size: int = 100_000,
+    ):
+        """Ingest attributed nodes from a Polars DataFrame.
+
+        The ``node_value`` column is required and must contain serialized node
+        payload bytes compatible with the current ``GraphDB`` serializer.
+        """
+        node_list = NodeList.from_polars(df, node_id=node_id, node_value=node_value)
+        for chunk in node_list.chunks(chunk_size):
+            self.store.ingest_nodes_columnar(chunk, native=native)
+        return len(node_list.node_ids)
+
+    def serialize_node_value(self, node: Node) -> bytes:
+        """Serialize a node for use with columnar node ingestion."""
+        return self.entity_serializer.serialize(node, "Node")
+
+    def serialize_edge_value(self, edge: Edge) -> bytes:
+        """Serialize an edge for use with columnar edge ingestion."""
+        return self.entity_serializer.serialize(edge, "Edge")
+
     def get_nodes(self, node_ids: list[str]) -> list[Node]:
         """
         Use store.get_nodes_bulk(...) and deserialize each one.
@@ -1017,6 +1065,77 @@ class GraphDB:
 
         # 5) One batch write for adjacency
         self.store.put_adjacency_bulk(final_adjacency)
+
+    def ingest_edges_arrow(
+        self,
+        edge_ids,
+        sources,
+        targets,
+        edge_types,
+        edge_values,
+        *,
+        append_only: bool = True,
+        native: bool = True,
+        chunk_size: int = 100_000,
+    ):
+        """Ingest typed edges from Arrow-like columns.
+
+        ``edge_values`` is required and must contain serialized edge payloads
+        compatible with the current ``GraphDB`` serializer. This ingestion path
+        writes edge records and typed adjacency records only; it intentionally
+        skips legacy adjacency blobs for append-friendly bulk loading.
+
+        Args:
+            edge_ids: Arrow-like or Python column of edge IDs.
+            sources: Arrow-like or Python column of source node IDs.
+            targets: Arrow-like or Python column of target node IDs.
+            edge_types: Arrow-like or Python column of typed traversal labels.
+            edge_values: Arrow-like or Python column of serialized edge bytes.
+            append_only: Columnar ingestion currently requires ``True``.
+            native: Use native backend columnar ingestion when available.
+            chunk_size: Maximum rows per backend write.
+
+        Returns:
+            Number of ingested edges.
+        """
+        if not append_only:
+            raise NotImplementedError("columnar edge ingestion currently requires append_only=True")
+        edge_list = EdgeList.from_arrow(edge_ids, sources, targets, edge_types, edge_values)
+        for chunk in edge_list.chunks(chunk_size):
+            self.store.ingest_edges_columnar(chunk, append_only=append_only, native=native)
+        return len(edge_list.edge_ids)
+
+    def ingest_edges_polars(
+        self,
+        df,
+        *,
+        edge_id: str = "edge_id",
+        source: str = "source",
+        target: str = "target",
+        edge_type: str = "edge_type",
+        edge_value: str = "edge_value",
+        append_only: bool = True,
+        native: bool = True,
+        chunk_size: int = 100_000,
+    ):
+        """Ingest typed edges from a Polars DataFrame.
+
+        The ``edge_value`` column is required and must contain serialized edge
+        payload bytes compatible with the current ``GraphDB`` serializer.
+        """
+        if not append_only:
+            raise NotImplementedError("columnar edge ingestion currently requires append_only=True")
+        edge_list = EdgeList.from_polars(
+            df,
+            edge_id=edge_id,
+            source=source,
+            target=target,
+            edge_type=edge_type,
+            edge_value=edge_value,
+        )
+        for chunk in edge_list.chunks(chunk_size):
+            self.store.ingest_edges_columnar(chunk, append_only=append_only, native=native)
+        return len(edge_list.edge_ids)
 
     def close(self):
         """Close the underlying key-value store.

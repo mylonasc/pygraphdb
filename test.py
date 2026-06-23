@@ -3,6 +3,7 @@
 import sys
 sys.path.append('./src')
 from pygraphdb.kvstores import LevelDBStore, LMDBStore, PyRexStore
+from pygraphdb.ingestion import EdgeList, NodeList
 from pygraphdb.sampling import SamplingHop, SamplingPattern
 from pygraphdb.serializers import JSONSerializer, MessagePackSerializer, PickleSerializer, ProtobufSerializer
 from pygraphdb.graphdb import GraphDB, Node, Edge
@@ -150,6 +151,149 @@ class SerializerGraphDBTests(unittest.TestCase):
         finally:
             graph_db.close()
 
+
+class ColumnarIngestionTests(unittest.TestCase):
+    def setUp(self):
+        self.test_dir = tempfile.mkdtemp(prefix="graphdb_columnar_test_")
+
+    def tearDown(self):
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    def test_node_list_requires_serialized_values(self):
+        with self.assertRaisesRegex(ValueError, "node_values is required"):
+            NodeList.from_arrow(["n1"], None)
+
+    def test_edge_list_requires_serialized_values(self):
+        with self.assertRaisesRegex(ValueError, "edge_values is required"):
+            EdgeList.from_arrow(["e1"], ["n1"], ["n2"], ["rel"], None)
+
+    def test_edge_list_validates_matching_lengths(self):
+        with self.assertRaisesRegex(ValueError, "column lengths must match"):
+            EdgeList.from_arrow(["e1", "e2"], ["n1"], ["n2"], ["rel"], [b"value"])
+
+    def test_graphdb_ingests_serialized_nodes_and_edges_from_columns(self):
+        graph_db = GraphDB(LMDBStore(path=self.test_dir), PickleSerializer())
+        try:
+            nodes = [
+                Node(node_id="drug-1", properties={"kind": "drug"}),
+                Node(node_id="protein-1", properties={"kind": "protein"}),
+            ]
+            node_values = [graph_db.serialize_node_value(node) for node in nodes]
+
+            self.assertEqual(graph_db.ingest_nodes_arrow([node.get_id for node in nodes], node_values, chunk_size=1), 2)
+
+            edge = Edge(
+                edge_id="d1-p1",
+                source="drug-1",
+                target="protein-1",
+                properties={"type": "drug-to-protein", "score": 0.9},
+            )
+            self.assertEqual(
+                graph_db.ingest_edges_arrow(
+                    [edge.get_id],
+                    [edge.source],
+                    [edge.target],
+                    [edge.get_type],
+                    [graph_db.serialize_edge_value(edge)],
+                    chunk_size=1,
+                ),
+                1,
+            )
+
+            self.assertEqual(graph_db.get_node(b"drug-1").properties, {"kind": "drug"})
+            self.assertEqual(graph_db.get_edge(b"d1-p1").properties["score"], 0.9)
+            self.assertEqual(
+                graph_db.neighbors_by_edge_type("drug-1", "drug-to-protein", direction="out"),
+                [b"protein-1"],
+            )
+            self.assertEqual(
+                graph_db.neighbors_by_edge_type("protein-1", "drug-to-protein", direction="in"),
+                [b"drug-1"],
+            )
+            self.assertEqual(graph_db.get_adjacency_list(b"drug-1", direction="any"), [])
+        finally:
+            graph_db.close()
+
+    def test_columnar_edge_ingestion_requires_append_only(self):
+        graph_db = GraphDB(LMDBStore(path=self.test_dir), PickleSerializer())
+        try:
+            with self.assertRaisesRegex(NotImplementedError, "append_only=True"):
+                graph_db.ingest_edges_arrow(["e1"], ["n1"], ["n2"], ["rel"], [b"value"], append_only=False)
+        finally:
+            graph_db.close()
+
+    def test_pyrex_store_native_columnar_path_writes_expected_batches(self):
+        class FakeDB:
+            def __init__(self):
+                self.batches = []
+
+            def write_columnar_batch(self, keys, values, write_options=None):
+                self.batches.append((list(keys), list(values), write_options))
+
+        store = object.__new__(PyRexStore)
+        store.db = FakeDB()
+        store.write_options = object()
+        edge_list = EdgeList.from_arrow(
+            ["e1", "e2"],
+            ["n1", "n1"],
+            ["n2", "n3"],
+            ["rel", "rel"],
+            [b"edge-value-1", b"edge-value-2"],
+        )
+
+        store.ingest_edges_columnar(edge_list, native=True)
+
+        self.assertEqual(len(store.db.batches), 3)
+        self.assertEqual(store.db.batches[0][0], [b"E\x1fe1", b"E\x1fe2"])
+        self.assertEqual(store.db.batches[0][1], [b"edge-value-1", b"edge-value-2"])
+        self.assertEqual(store.db.batches[1][0], [b"T\x1fout\x1fn1\x1frel\x1fe1", b"T\x1fout\x1fn1\x1frel\x1fe2"])
+        self.assertEqual(store.db.batches[1][1], [b"n2", b"n3"])
+        self.assertEqual(store.db.batches[2][0], [b"T\x1fin\x1fn2\x1frel\x1fe1", b"T\x1fin\x1fn3\x1frel\x1fe2"])
+        self.assertEqual(store.db.batches[2][1], [b"n1", b"n1"])
+
+    def test_pyrex_store_native_columnar_node_path_writes_expected_batch(self):
+        class FakeDB:
+            def __init__(self):
+                self.batches = []
+
+            def write_columnar_batch(self, keys, values, write_options=None):
+                self.batches.append((list(keys), list(values), write_options))
+
+        store = object.__new__(PyRexStore)
+        store.db = FakeDB()
+        store.write_options = object()
+        node_list = NodeList.from_arrow(["n1", "n2"], [b"node-value-1", b"node-value-2"])
+
+        store.ingest_nodes_columnar(node_list, native=True)
+
+        self.assertEqual(len(store.db.batches), 1)
+        self.assertEqual(store.db.batches[0][0], [b"N\x1fn1", b"N\x1fn2"])
+        self.assertEqual(store.db.batches[0][1], [b"node-value-1", b"node-value-2"])
+
+    @unittest.skipIf(importlib.util.find_spec("pyrex") is None, "pyrex not installed")
+    def test_graphdb_ingests_nodes_and_edges_with_real_pyrex_native_columnar_path(self):
+        graph_db = GraphDB(PyRexStore(path=self.test_dir), PickleSerializer())
+        try:
+            if not graph_db.store.has_native_columnar_ingestion():
+                self.skipTest("pyrex native columnar ingestion is not available")
+
+            node = Node(node_id="n1", properties={"label": "drug"})
+            edge = Edge(edge_id="e1", source="n1", target="n2", properties={"type": "rel", "weight": 1})
+
+            graph_db.ingest_nodes_arrow(["n1"], [graph_db.serialize_node_value(node)])
+            graph_db.ingest_edges_arrow(
+                ["e1"],
+                ["n1"],
+                ["n2"],
+                ["rel"],
+                [graph_db.serialize_edge_value(edge)],
+            )
+
+            self.assertEqual(graph_db.get_node(b"n1").properties, {"label": "drug"})
+            self.assertEqual(graph_db.get_edge(b"e1").properties["weight"], 1)
+            self.assertEqual(graph_db.neighbors_by_edge_type("n1", "rel"), [b"n2"])
+        finally:
+            graph_db.close()
 
 class SamplingConfigTests(unittest.TestCase):
     def test_sampling_hop_round_trips_dict_config(self):

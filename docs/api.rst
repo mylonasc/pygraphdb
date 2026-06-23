@@ -17,6 +17,14 @@ Sampling Configuration
    :undoc-members:
    :show-inheritance:
 
+Columnar Ingestion
+------------------
+
+.. automodule:: pygraphdb.ingestion
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 Key-Value Stores
 ----------------
 
