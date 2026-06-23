@@ -716,6 +716,90 @@ class TypedTraversalBase(unittest.TestCase):
         self.assertTrue(all(node is not None for node in subgraph["nodes"].values()))
         self.assertTrue(all(edge is not None for edge in subgraph["edges"].values()))
 
+    def test_cypher_one_hop_typed_match_returns_bound_nodes(self):
+        self.populate_typed_graph()
+
+        result = self.graph_db.query(
+            'MATCH (d {id: "drug-1"})-[:drug-to-protein]->(p) RETURN d, p'
+        )
+
+        self.assertEqual(result.columns, ("d", "p"))
+        self.assertEqual({record["d"].get_id for record in result}, {"drug-1"})
+        self.assertEqual(
+            {record["p"].get_id for record in result},
+            {"protein-1", "protein-2"},
+        )
+
+    def test_cypher_one_hop_typed_match_can_bind_relationship(self):
+        self.populate_typed_graph()
+
+        result = self.graph_db.query(
+            'MATCH (d {id: "drug-1"})-[r:drug-to-disease]->(x) RETURN d, r, x'
+        )
+
+        self.assertEqual(result.columns, ("d", "r", "x"))
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result.records[0]["r"].get_id, "d1-disease")
+        self.assertEqual(result.records[0]["x"].get_id, "disease-1")
+
+    def test_cypher_multi_hop_typed_match_returns_bound_nodes(self):
+        self.populate_typed_graph()
+
+        result = self.graph_db.query(
+            'MATCH (d {id: "drug-1"})-[:drug-to-protein]->(p)-[:protein-to-disease]->(x) RETURN d, p, x'
+        )
+
+        self.assertEqual(result.columns, ("d", "p", "x"))
+        self.assertEqual({record["d"].get_id for record in result}, {"drug-1"})
+        self.assertEqual(
+            {(record["p"].get_id, record["x"].get_id) for record in result},
+            {
+                ("protein-1", "disease-1"),
+                ("protein-1", "disease-2"),
+                ("protein-2", "disease-3"),
+            },
+        )
+
+    def test_cypher_multi_hop_typed_match_can_bind_relationships(self):
+        self.populate_typed_graph()
+
+        result = self.graph_db.query(
+            'MATCH (d {id: "drug-1"})-[r1:drug-to-protein]->(p)-[r2:protein-to-disease]->(x) RETURN r1, r2, x'
+        )
+
+        self.assertEqual(result.columns, ("r1", "r2", "x"))
+        self.assertEqual(
+            {(record["r1"].get_type, record["r2"].get_type, record["x"].get_id) for record in result},
+            {
+                ("drug-to-protein", "protein-to-disease", "disease-1"),
+                ("drug-to-protein", "protein-to-disease", "disease-2"),
+                ("drug-to-protein", "protein-to-disease", "disease-3"),
+            },
+        )
+
+    def test_cypher_sample_typed_paths_call_returns_paths(self):
+        self.populate_typed_graph()
+
+        result = self.graph_db.query(
+            'CALL pg.sample_typed_paths(["drug-1"], '
+            '[{"edge_type": "drug-to-protein", "direction": "out", "sample_size": 2}, '
+            '{"edge_type": "protein-to-disease", "direction": "out", "sample_size": 1}]) '
+            'YIELD path RETURN path'
+        )
+
+        self.assertEqual(result.columns, ("path",))
+        self.assertTrue(result.records)
+        for record in result:
+            sampled_path = record["path"]
+            self.assertEqual(sampled_path["seed"], b"drug-1")
+            self.assertEqual(len(sampled_path["path"]), 2)
+            self.assertEqual(sampled_path["path"][0]["edge_type"], "drug-to-protein")
+            self.assertEqual(sampled_path["path"][1]["edge_type"], "protein-to-disease")
+
+    def test_cypher_unsupported_query_raises_clear_error(self):
+        with self.assertRaisesRegex(ValueError, "Unsupported Cypher query"):
+            self.graph_db.query("MATCH (n) RETURN n")
+
     def test_rebuild_typed_adjacency_from_edge_records(self):
         for node_id in ["drug-1", "protein-1"]:
             self.graph_db.put_node(Node(node_id=node_id))

@@ -1137,6 +1137,16 @@ class GraphDB:
             self.store.ingest_edges_columnar(chunk, append_only=append_only, native=native)
         return len(edge_list.edge_ids)
 
+    def query(self, cypher: str):
+        """Execute a minimal read-only Cypher query.
+
+        The initial supported subset is one anchored, outgoing, typed traversal:
+        ``MATCH (a {id: "node-id"})-[:EDGE_TYPE]->(b) RETURN a, b``.
+        """
+        from .cypher import execute
+
+        return execute(self, cypher)
+
     def close(self):
         """Close the underlying key-value store.
 

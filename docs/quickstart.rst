@@ -113,6 +113,32 @@ Traverse With BFS
    visited = graph_db.bfs(b"user-0", direction="any")
    print(visited)
 
+Query With Cypher
+-----------------
+
+``GraphDB.query`` supports an initial read-only Cypher subset for anchored typed
+traversal and typed path sampling.
+
+.. code-block:: python
+
+   result = graph_db.query(
+       'MATCH (drug {id: "drug-1"})-[:drug-to-protein]->(protein) RETURN drug, protein'
+   )
+
+   for record in result:
+       print(record["drug"].get_id, record["protein"].get_id)
+
+Multi-hop typed traversal is supported when each hop is outgoing and has an edge
+type:
+
+.. code-block:: python
+
+   result = graph_db.query(
+       'MATCH (drug {id: "drug-1"})-[:drug-to-protein]->(protein)-[:protein-to-disease]->(disease) RETURN drug, protein, disease'
+   )
+
+See :doc:`cypher` for the full supported subset and current limitations.
+
 Use Stable IDs
 --------------
 

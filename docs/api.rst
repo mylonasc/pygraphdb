@@ -25,6 +25,14 @@ Columnar Ingestion
    :undoc-members:
    :show-inheritance:
 
+Cypher Queries
+--------------
+
+.. automodule:: pygraphdb.cypher
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 Key-Value Stores
 ----------------
 

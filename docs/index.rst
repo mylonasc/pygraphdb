@@ -17,6 +17,7 @@ backend, serializing properties, traversing typed edges, and sampling subgraphs.
    storage-backends
    serializers
    typed-sampling
+   cypher
    performance
    notebooks
 

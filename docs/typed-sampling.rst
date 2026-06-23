@@ -107,6 +107,25 @@ Existing dictionary configurations are still supported.
 
    paths = graph_db.sample_typed_paths(["drug-1"], pattern)
 
+Cypher Sampling Procedure
+-------------------------
+
+The Cypher API exposes multi-hop typed path sampling through a PyGraphDB-specific
+procedure call. This delegates to ``GraphDB.sample_typed_paths`` and returns one
+``path`` value per sampled path.
+
+.. code-block:: python
+
+   result = graph_db.query(
+       'CALL pg.sample_typed_paths(["drug-1"], '
+       '[{"edge_type": "drug-to-protein", "direction": "out", "sample_size": 2}, '
+       '{"edge_type": "protein-to-disease", "direction": "out", "sample_size": 1}]) '
+       'YIELD path RETURN path'
+   )
+
+   for record in result:
+       print(record["path"])
+
 Sample a Materialized Subgraph
 ------------------------------
 
