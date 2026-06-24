@@ -18,8 +18,8 @@ Use ``LMDBStore`` for a mature embedded backend with named sub-databases.
    store = LMDBStore(path="graph_lmdb", map_size=2**30)
    graph_db = GraphDB(store, PickleSerializer())
 
-LMDB keeps separate databases for nodes, edges, adjacency, and typed adjacency.
-Increase ``map_size`` when loading large graphs.
+LMDB keeps separate databases for nodes, edges, adjacency, typed adjacency, and
+sorted indexes. Increase ``map_size`` when loading large graphs.
 
 LevelDB Backend
 ---------------
@@ -69,6 +69,33 @@ native ``write_columnar_batch`` API through ``GraphDB.ingest_nodes_arrow`` and
 ``GraphDB.ingest_edges_arrow``. The columnar methods currently require
 caller-provided serialized ``node_value`` and ``edge_value`` payloads and edge
 ingestion is append-only.
+
+Sorted Indexes
+--------------
+
+All backends implement a small sorted index interface used by labels,
+relationship type catalogs, and explicit exact-match property indexes:
+
+- ``put_index_entry(index_name, key_parts, value)``
+- ``put_index_entries_bulk(entries)``
+- ``delete_index_entry(index_name, key_parts, value)``
+- ``iter_index_prefix(index_name, key_parts)``
+
+These indexes are prefix-scanned by the backend rather than by deserializing all
+nodes or edges. Current high-level indexes include:
+
+- ``node_label`` for ``Node.labels`` and ``GraphDB.nodes_by_label``.
+- ``node_property`` for explicitly registered node properties.
+- ``edge_type`` for ``edge.properties["type"]`` and ``GraphDB.edges_by_type``.
+- ``edge_property`` for explicitly registered edge properties.
+
+Property indexes are intentionally explicit. Register them only for predicates
+you expect to use frequently:
+
+.. code-block:: python
+
+   graph_db.create_node_property_index("name")
+   graph_db.create_edge_property_index("score")
 
 Backend Selection Pattern
 -------------------------

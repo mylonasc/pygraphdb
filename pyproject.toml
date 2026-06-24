@@ -21,19 +21,24 @@ leveldb = ["plyvel"]
 msgpack = ["msgpack"]
 protobuf = ["protobuf"]
 bloom = ["pybloom-live"]
-coverage = ["coverage"]
+coverage = ["coverage", "pytest"]
 docs = ["furo", "myst-parser", "sphinx"]
 rocksdb = ["pyrex-rocksdb>=0.3.0a0"]
 arrow = ["pyarrow"]
 polars = ["polars", "pyarrow"]
 fast-ingest = ["pyarrow", "polars", "pyrex-rocksdb>=0.3.0a0"]
 all = ["lmdb", "msgpack", "plyvel", "protobuf", "pybloom-live", "pyrex-rocksdb>=0.3.0a0", "pyarrow", "polars"]
-dev = ["coverage", "furo", "lmdb", "msgpack", "myst-parser", "plyvel", "protobuf", "pybloom-live", "pyrex-rocksdb>=0.3.0a0", "pyarrow", "polars", "sphinx"]
+dev = ["coverage", "furo", "lmdb", "msgpack", "myst-parser", "plyvel", "protobuf", "pybloom-live", "pyrex-rocksdb>=0.3.0a0", "pyarrow", "polars", "pytest", "sphinx"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
 [dependency-groups]
 dev = [
     "coverage>=7.10.7",
+    "pytest>=8.0",
 ]

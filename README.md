@@ -92,7 +92,7 @@ Regenerate the test coverage badge with:
 python scripts/update_coverage_badge.py
 ```
 
-The script runs `unittest` through `coverage`, computes total coverage for `src/pygraphdb`, and updates `assets/coverage_badge.svg`.
+The script runs `pytest` through `coverage`, computes total coverage for `src/pygraphdb`, and updates `assets/coverage_badge.svg`.
 
 # Example usage
 
@@ -129,6 +129,33 @@ print("Fetched Edge A->B:", fetched_edge_ab.to_dict())
 
 # 8. Cleanup
 graph_db.close()
+```
+
+# Labels, indexes, and Cypher
+
+PyGraphDB stores native node labels and maintains sorted indexes for labels, relationship types, and explicitly registered exact-match properties. These indexes are designed to support query execution without scanning and deserializing every node or edge.
+
+```python
+from pygraphdb.graphdb import Edge, GraphDB, Node
+
+graph_db.put_node(Node(node_id="drug-1", labels=["Drug"], properties={"name": "Aspirin"}))
+graph_db.put_node(Node(node_id="protein-1", labels=["Protein"], properties={"name": "PTGS1"}))
+graph_db.put_edge(Edge(
+    edge_id="d1-p1",
+    source="drug-1",
+    target="protein-1",
+    properties={"type": "drug-to-protein", "score": 0.9},
+))
+
+graph_db.create_node_property_index("name")
+graph_db.create_edge_property_index("score")
+
+graph_db.nodes_by_label("Drug")
+graph_db.nodes_by_property("name", "Aspirin")
+graph_db.edges_by_type("drug-to-protein")
+graph_db.edges_by_property("score", 0.9)
+
+result = graph_db.query('MATCH (drug:Drug {name: "Aspirin"}) RETURN drug')
 ```
 
 # Typed sampled traversal

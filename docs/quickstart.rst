@@ -12,8 +12,8 @@ Create a Graph
 
    graph_db = GraphDB(LMDBStore(path="quickstart_lmdb"), PickleSerializer())
 
-   alice = Node(node_id="alice", properties={"name": "Alice", "age": 30})
-   bob = Node(node_id="bob", properties={"name": "Bob", "age": 25})
+   alice = Node(node_id="alice", labels=["Person"], properties={"name": "Alice", "age": 30})
+   bob = Node(node_id="bob", labels=["Person"], properties={"name": "Bob", "age": 25})
 
    graph_db.put_node(alice)
    graph_db.put_node(bob)
@@ -66,6 +66,39 @@ Fetch Nodes in Bulk
    for node in fetched:
        print(None if node is None else node.get_id)
 
+Labels and Exact-Match Indexes
+------------------------------
+
+Labels are stored natively on ``Node`` objects and maintained in a sorted label
+index. Label lookups avoid full node scans.
+
+.. code-block:: python
+
+   graph_db.put_node(Node(node_id="drug-1", labels=["Drug"], properties={"name": "Aspirin", "kind": "drug"}))
+   graph_db.put_node(Node(node_id="protein-1", labels=["Protein"], properties={"name": "PTGS1", "kind": "protein"}))
+
+   drugs = graph_db.nodes_by_label("Drug")
+   print([node.get_id for node in drugs])
+
+Property indexes are explicit so ingestion does not pay for indexes you do not
+need. Register an exact-match node or edge property index before using it for
+performance-sensitive lookup.
+
+.. code-block:: python
+
+   graph_db.create_node_property_index("name")
+   aspirin = graph_db.nodes_by_property("name", "Aspirin")
+
+   graph_db.create_edge_property_index("weight")
+   strong_edges = graph_db.edges_by_property("weight", 0.9)
+
+Relationship types are indexed through the existing ``edge.properties["type"]``
+convention.
+
+.. code-block:: python
+
+   friend_edges = graph_db.edges_by_type("friend")
+
 Columnar Ingestion
 ------------------
 
@@ -116,8 +149,8 @@ Traverse With BFS
 Query With Cypher
 -----------------
 
-``GraphDB.query`` supports an initial read-only Cypher subset for anchored typed
-traversal and typed path sampling.
+``GraphDB.query`` supports an initial read-only Cypher subset for indexed label
+scans, anchored typed traversal, and typed path sampling.
 
 .. code-block:: python
 
@@ -127,6 +160,12 @@ traversal and typed path sampling.
 
    for record in result:
        print(record["drug"].get_id, record["protein"].get_id)
+
+Indexed labels are available through Cypher as well:
+
+.. code-block:: python
+
+   result = graph_db.query('MATCH (drug:Drug {name: "Aspirin"}) RETURN drug')
 
 Multi-hop typed traversal is supported when each hop is outgoing and has an edge
 type:

@@ -3,17 +3,20 @@ Cypher Queries
 
 PyGraphDB includes an initial read-only Cypher API through
 ``GraphDB.query(cypher)``. The current implementation is intentionally small and
-maps directly to features that already have efficient database APIs: anchored
-typed traversal and typed path sampling.
+maps directly to features that already have efficient database APIs: indexed
+label scans, anchored typed traversal, and typed path sampling.
 
-Relationship types are read from ``edge.properties["type"]``. Native node labels
-are not implemented yet, so patterns such as ``(n:Drug)`` are not supported.
+Relationship types are read from ``edge.properties["type"]``. Node labels are
+stored natively through ``Node(labels=[...])`` and maintained in a sorted label
+index.
 
 Supported Feature Matrix
 ------------------------
 
 The table below distinguishes features available through the Python database API
 from features exposed through the Cypher API.
+
+Legend: ✅ supported, 🟡 partially supported, ❌ not supported.
 
 .. list-table:: Current DB API and Cypher API support
    :header-rows: 1
@@ -24,61 +27,101 @@ from features exposed through the Cypher API.
      - Cypher API
      - Notes
    * - Node and edge property storage
-     - Yes
-     - Partial
+     - ✅
+     - 🟡
      - Cypher can return bound ``Node`` and ``Edge`` objects, but property projections such as ``RETURN n.name`` are not implemented yet.
    * - Native node labels
-     - No
-     - No
-     - Labels are tracked as a missing graph-model feature. Use node properties such as ``kind`` for now.
+     - ✅
+     - ✅
+     - DB API supports ``Node(labels=[...])`` and ``nodes_by_label``. Cypher supports ``MATCH (n:Label) RETURN n``.
+   * - Exact-match node property indexes
+     - ✅
+     - 🟡
+     - DB API supports explicit indexes via ``create_node_property_index``. Cypher uses them for ``MATCH (n:Label {name: "..."}) RETURN n`` when registered.
+   * - Exact-match edge property indexes
+     - ✅
+     - ❌
+     - DB API supports explicit indexes via ``create_edge_property_index``. Cypher edge property predicates are not implemented yet.
    * - Dedicated relationship type field
-     - Partial
-     - Partial
+     - 🟡
+     - 🟡
      - Typed traversal uses ``edge.properties["type"]`` instead of a dedicated ``Edge.type`` field.
+   * - Relationship type catalog
+     - ✅
+     - ❌
+     - DB API supports ``edges_by_type``. Cypher does not yet support unanchored ``MATCH ()-[:TYPE]->()`` scans.
    * - Anchored one-hop typed traversal
-     - Yes
-     - Yes
+     - ✅
+     - ✅
      - DB API uses ``iter_typed_adjacency`` or ``neighbors_by_edge_type``. Cypher supports ``MATCH (a {id: "..."})-[:TYPE]->(b)``.
    * - Anchored multi-hop typed traversal
-     - Yes
-     - Yes
+     - ✅
+     - ✅
      - Cypher supports repeated outgoing typed hops from an anchored start node.
    * - Reverse typed traversal
-     - Yes
-     - No
+     - ✅
+     - ❌
      - DB API supports ``direction="in"``. Cypher support for ``<-[:TYPE]-`` is not implemented yet.
    * - Undirected typed traversal
-     - Yes
-     - No
+     - ✅
+     - ❌
      - DB API supports ``direction="any"``. Cypher support for ``-[:TYPE]-`` is not implemented yet.
    * - Untyped BFS traversal
-     - Yes
-     - No
+     - ✅
+     - ❌
      - Available as ``GraphDB.bfs`` over legacy adjacency lists.
    * - Single-hop typed neighbor sampling
-     - Yes
-     - No
+     - ✅
+     - ❌
      - Available as ``GraphDB.sample_neighbors``.
    * - Multi-hop typed path sampling
-     - Yes
-     - Yes
+     - ✅
+     - ✅
      - Cypher exposes this through ``CALL pg.sample_typed_paths(...) YIELD path RETURN path``.
    * - Materialized sampled subgraph
-     - Yes
-     - No
+     - ✅
+     - ❌
      - Available as ``GraphDB.sample_typed_subgraph``.
    * - Property filtering with ``WHERE``
-     - No shared evaluator
-     - No
-     - Property indexes and query predicate evaluation are future work.
-   * - Property indexes
-     - No
-     - No
-     - Property predicates currently require future full-scan/filter support or indexes.
+     - 🟡
+     - ❌
+     - DB API has exact-match index lookup helpers, but Cypher ``WHERE`` parsing is future work.
    * - Mutating Cypher queries
-     - DB mutations exist
-     - No
+     - ✅
+     - ❌
      - Use ``put_node``, ``put_edge``, ``put_edges_bulk``, and ingestion APIs directly.
+
+Indexed Label Scans
+-------------------
+
+Create nodes with native labels, then query by label without scanning every node.
+
+.. code-block:: python
+
+   graph_db.put_node(Node(node_id="drug-1", labels=["Drug"], properties={"name": "Aspirin"}))
+
+   result = graph_db.query('MATCH (d:Drug) RETURN d')
+
+   for record in result:
+       print(record["d"].get_id)
+
+Indexed Label and Property Lookup
+---------------------------------
+
+Exact-match property indexes are explicit. Register an index before relying on
+it for performance-sensitive lookup.
+
+.. code-block:: python
+
+   graph_db.create_node_property_index("name")
+
+   result = graph_db.query('MATCH (d:Drug {name: "Aspirin"}) RETURN d')
+
+   for record in result:
+       print(record["d"].properties["name"])
+
+If a property index is not registered, Cypher still restricts the search to the
+label index and then filters decoded nodes in Python.
 
 Anchored One-Hop Traversal
 --------------------------
@@ -162,9 +205,9 @@ Current Cypher Limitations
 Unsupported Cypher features raise ``ValueError`` with a message describing the
 supported subset. The current Cypher API does not yet support:
 
-- Node labels such as ``(n:Drug)``.
+- Multiple labels in one node pattern, such as ``(n:Drug:Approved)``.
 - Reverse or undirected patterns such as ``<-[:TYPE]-`` or ``-[:TYPE]-``.
-- Unanchored scans such as ``MATCH (n) RETURN n``.
+- Unanchored all-node scans such as ``MATCH (n) RETURN n``.
 - ``WHERE`` predicates.
 - Property projections such as ``RETURN n.name``.
 - ``LIMIT``, ``ORDER BY``, aggregation, joins across separate patterns, or mutation clauses.

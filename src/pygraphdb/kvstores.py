@@ -1,9 +1,84 @@
 from typing import Optional, Dict, List, Union
+import base64
 import os
 import struct
 
 
 _TYPED_ADJ_SEP = b"\x1f"
+
+
+def _to_bytes(value) -> bytes:
+    """Normalize an index component to bytes.
+
+    Args:
+        value: Bytes or string-like value.
+
+    Returns:
+        Bytes suitable for key encoding.
+
+    Examples:
+        >>> _to_bytes("Drug")
+        b'Drug'
+    """
+    if isinstance(value, bytes):
+        return value
+    return str(value).encode("utf-8")
+
+
+def _index_part(value) -> bytes:
+    """Encode one index key component safely.
+
+    Args:
+        value: Raw component value.
+
+    Returns:
+        URL-safe base64 bytes without padding.
+
+    Examples:
+        >>> _index_part("Drug")
+        b'RHJ1Zw'
+    """
+    return base64.urlsafe_b64encode(_to_bytes(value)).rstrip(b"=")
+
+
+def _index_key(index_name, key_parts, value=b"") -> bytes:
+    """Build a sorted index key.
+
+    Args:
+        index_name: Logical index name.
+        key_parts: Ordered prefix components.
+        value: Stored entity ID or payload.
+
+    Returns:
+        Encoded key in the shared index namespace.
+
+    Examples:
+        >>> _index_key("node_label", [b"Drug"], b"drug-1").startswith(b"I")
+        True
+    """
+    parts = [_index_part(index_name)]
+    parts.extend(_index_part(part) for part in key_parts)
+    parts.append(_index_part(value))
+    return b"I" + _TYPED_ADJ_SEP + _TYPED_ADJ_SEP.join(parts)
+
+
+def _index_prefix(index_name, key_parts) -> bytes:
+    """Build the prefix used for sorted index scans.
+
+    Args:
+        index_name: Logical index name.
+        key_parts: Ordered prefix components.
+
+    Returns:
+        Encoded prefix ending with the index separator.
+
+    Examples:
+        >>> _index_prefix("node_label", [b"Drug"]).startswith(b"I")
+        True
+    """
+    parts = [_index_part(index_name)]
+    parts.extend(_index_part(part) for part in key_parts)
+    return b"I" + _TYPED_ADJ_SEP + _TYPED_ADJ_SEP.join(parts) + _TYPED_ADJ_SEP
 
 
 def _missing_dependency_error(package_name, install_name=None, feature_name=None):
@@ -145,6 +220,60 @@ class KVStore:
         """Yield typed adjacency records for a node and edge type."""
         raise NotImplementedError
 
+    def put_index_entry(self, index_name: str, key_parts: list[bytes], value: bytes):
+        """Store one sorted index entry.
+
+        Args:
+            index_name: Logical index name, such as ``"node_label"``.
+            key_parts: Ordered components used as the scan prefix.
+            value: Entity ID or payload returned by prefix scans.
+
+        Examples:
+            >>> store.put_index_entry("node_label", [b"Drug"], b"drug-1")  # doctest: +SKIP
+        """
+        raise NotImplementedError
+
+    def put_index_entries_bulk(self, entries: list[tuple[str, list[bytes], bytes]]):
+        """Store many sorted index entries.
+
+        Args:
+            entries: Tuples of ``(index_name, key_parts, value)``.
+
+        Examples:
+            >>> store.put_index_entries_bulk([("node_label", [b"Drug"], b"drug-1")])  # doctest: +SKIP
+        """
+        for index_name, key_parts, value in entries:
+            self.put_index_entry(index_name, key_parts, value)
+
+    def delete_index_entry(self, index_name: str, key_parts: list[bytes], value: bytes):
+        """Delete one sorted index entry.
+
+        Args:
+            index_name: Logical index name.
+            key_parts: Ordered components used when the entry was written.
+            value: Entity ID or payload used when the entry was written.
+
+        Examples:
+            >>> store.delete_index_entry("node_label", [b"Drug"], b"drug-1")  # doctest: +SKIP
+        """
+        raise NotImplementedError
+
+    def iter_index_prefix(self, index_name: str, key_parts: list[bytes]):
+        """Yield values whose index key starts with ``key_parts``.
+
+        Args:
+            index_name: Logical index name.
+            key_parts: Ordered prefix components.
+
+        Yields:
+            Values associated with matching index entries.
+
+        Examples:
+            >>> list(store.iter_index_prefix("node_label", [b"Drug"]))  # doctest: +SKIP
+            [b'drug-1']
+        """
+        raise NotImplementedError
+
     def ingest_nodes_columnar(self, node_list, *, native: bool = True):
         """Store columnar nodes with caller-provided serialized values."""
         self.put_nodes_bulk(dict(zip(node_list.node_ids, node_list.node_values)))
@@ -157,6 +286,10 @@ class KVStore:
         self.put_typed_adjacency_bulk(
             list(zip(edge_list.sources, edge_list.targets, edge_list.edge_types, edge_list.edge_ids))
         )
+        self.put_index_entries_bulk([
+            ("edge_type", [edge_type.encode("utf-8")], edge_id)
+            for edge_type, edge_id in zip(edge_list.edge_types, edge_list.edge_ids)
+        ])
 
 # =========================================
 # LMDB Implementation
@@ -231,7 +364,7 @@ class LMDBStore(KVStore):
         except ImportError as exc:
             raise _missing_dependency_error("lmdb", feature_name="LMDBStore") from exc
 
-        max_dbs = 4
+        max_dbs = 5
         if map_keys:
             max_dbs += 2
         self.env = lmdb.open(path, map_size=map_size, subdir=True, max_dbs=max_dbs)
@@ -239,6 +372,7 @@ class LMDBStore(KVStore):
         self.edges_db = self.env.open_db(b'edges')
         self.adj_db   = self.env.open_db(b'adj')
         self.typed_adj_db = self.env.open_db(b'typed_adj')
+        self.index_db = self.env.open_db(b'index')
 
         if map_keys:
             self.node_key_encdec_db = self.env.open_db(b'node_key_db')
@@ -445,6 +579,34 @@ class LMDBStore(KVStore):
                 edge_id = key[len(prefix):]
                 yield edge_id, neighbor_id
 
+    def put_index_entry(self, index_name: str, key_parts: list[bytes], value: bytes):
+        """Store one sorted index entry."""
+        with self.env.begin(write=True, db=self.index_db) as txn:
+            txn.put(_index_key(index_name, key_parts, value), value)
+
+    def put_index_entries_bulk(self, entries: list[tuple[str, list[bytes], bytes]]):
+        """Store many sorted index entries in one transaction."""
+        with self.env.begin(write=True, db=self.index_db) as txn:
+            for index_name, key_parts, value in entries:
+                txn.put(_index_key(index_name, key_parts, value), value)
+
+    def delete_index_entry(self, index_name: str, key_parts: list[bytes], value: bytes):
+        """Delete one sorted index entry."""
+        with self.env.begin(write=True, db=self.index_db) as txn:
+            txn.delete(_index_key(index_name, key_parts, value))
+
+    def iter_index_prefix(self, index_name: str, key_parts: list[bytes]):
+        """Yield values whose index key starts with ``key_parts``."""
+        prefix = _index_prefix(index_name, key_parts)
+        with self.env.begin(write=False, db=self.index_db) as txn:
+            cursor = txn.cursor()
+            if not cursor.set_range(prefix):
+                return
+            for key, value in cursor:
+                if not key.startswith(prefix):
+                    break
+                yield value
+
 
 # =========================================
 # LevelDB Implementation
@@ -467,18 +629,20 @@ class LevelDBStore(KVStore):
         except ImportError as exc:
             raise _missing_dependency_error("plyvel", feature_name="LevelDBStore") from exc
         
-        self.db_paths = {'nodes' : os.path.join('nodes'), 'edges': os.path.join('edges'), 'adjacency' : os.path.join('adjacency'), 'typed_adjacency': os.path.join('typed_adjacency')}
+        self.db_paths = {'nodes' : os.path.join('nodes'), 'edges': os.path.join('edges'), 'adjacency' : os.path.join('adjacency'), 'typed_adjacency': os.path.join('typed_adjacency'), 'index': os.path.join('index')}
         if not os.path.exists(path):
             os.makedirs(path, exist_ok=True)
         self.db_nodes = plyvel.DB(os.path.join(path, 'nodes'), create_if_missing=True)
         self.db_edges = plyvel.DB(os.path.join(path, 'edges'), create_if_missing=True)
         self.db_adj   = plyvel.DB(os.path.join(path, 'adjacency'), create_if_missing=True)
         self.db_typed_adj = plyvel.DB(os.path.join(path, 'typed_adjacency'), create_if_missing=True)
+        self.db_index = plyvel.DB(os.path.join(path, 'index'), create_if_missing=True)
         self.db_dict = {
             'nodes' : self.db_nodes,
             'edges' : self.db_edges,
             'adjacency' : self.db_adj,
             'typed_adjacency': self.db_typed_adj,
+            'index': self.db_index,
         }
     # def put(self, key: bytes, value: bytes):
     #     self.db.put(key, value)
@@ -662,8 +826,30 @@ class LevelDBStore(KVStore):
                 edge_id = key[len(prefix):]
                 yield edge_id, neighbor_id
 
+    def put_index_entry(self, index_name: str, key_parts: list[bytes], value: bytes):
+        """Store one sorted index entry."""
+        self.db_index.put(_index_key(index_name, key_parts, value), value)
+
+    def put_index_entries_bulk(self, entries: list[tuple[str, list[bytes], bytes]]):
+        """Store many sorted index entries in one write batch."""
+        with self.db_index.write_batch() as wb:
+            for index_name, key_parts, value in entries:
+                wb.put(_index_key(index_name, key_parts, value), value)
+
+    def delete_index_entry(self, index_name: str, key_parts: list[bytes], value: bytes):
+        """Delete one sorted index entry."""
+        self.db_index.delete(_index_key(index_name, key_parts, value))
+
+    def iter_index_prefix(self, index_name: str, key_parts: list[bytes]):
+        """Yield values whose index key starts with ``key_parts``."""
+        prefix = _index_prefix(index_name, key_parts)
+        with self.db_index.iterator(prefix=prefix) as it:
+            for _, value in it:
+                yield value
+
     def close(self):
         """Close all LevelDB sub-databases."""
+        self.db_index.close()
         self.db_typed_adj.close()
         self.db_adj.close()
         self.db_edges.close()
@@ -911,11 +1097,19 @@ class PyRexStore(KVStore):
             self._write_columnar_batch(edge_keys, edge_list.edge_values)
             self._write_columnar_batch(out_keys, edge_list.targets)
             self._write_columnar_batch(in_keys, edge_list.sources)
+            self._write_columnar_batch(
+                [_index_key("edge_type", [edge_type.encode("utf-8")], edge_id) for edge_type, edge_id in zip(edge_list.edge_types, edge_list.edge_ids)],
+                edge_list.edge_ids,
+            )
             return
         self.put_edges_bulk(dict(zip(edge_list.edge_ids, edge_list.edge_values)))
         self.put_typed_adjacency_bulk(
             list(zip(edge_list.sources, edge_list.targets, edge_list.edge_types, edge_list.edge_ids))
         )
+        self.put_index_entries_bulk([
+            ("edge_type", [edge_type.encode("utf-8")], edge_id)
+            for edge_type, edge_id in zip(edge_list.edge_types, edge_list.edge_ids)
+        ])
 
     def delete_typed_adjacency(self, source_id: bytes, target_id: bytes, edge_type: str, edge_id: bytes):
         """Delete forward and reverse typed adjacency records."""
@@ -934,6 +1128,34 @@ class PyRexStore(KVStore):
             if not key.startswith(prefix):
                 break
             yield key[len(prefix):], iterator.value()
+            iterator.next()
+        iterator.check_status()
+
+    def put_index_entry(self, index_name: str, key_parts: list[bytes], value: bytes):
+        """Store one sorted index entry."""
+        self.db.put(_index_key(index_name, key_parts, value), value, self.write_options)
+
+    def put_index_entries_bulk(self, entries: list[tuple[str, list[bytes], bytes]]):
+        """Store many sorted index entries in one write batch."""
+        batch = self._pyrex.PyWriteBatch()
+        for index_name, key_parts, value in entries:
+            batch.put(_index_key(index_name, key_parts, value), value)
+        self.db.write(batch, self.write_options)
+
+    def delete_index_entry(self, index_name: str, key_parts: list[bytes], value: bytes):
+        """Delete one sorted index entry."""
+        self.db.delete(_index_key(index_name, key_parts, value), self.write_options)
+
+    def iter_index_prefix(self, index_name: str, key_parts: list[bytes]):
+        """Yield values whose index key starts with ``key_parts``."""
+        prefix = _index_prefix(index_name, key_parts)
+        iterator = self.db.new_iterator()
+        iterator.seek(prefix)
+        while iterator.valid():
+            key = iterator.key()
+            if not key.startswith(prefix):
+                break
+            yield iterator.value()
             iterator.next()
         iterator.check_status()
 

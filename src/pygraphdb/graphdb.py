@@ -6,6 +6,7 @@ import json
 import os
 import random
 import uuid
+import base64
 from typing import TYPE_CHECKING, List, Optional, Union
 
 if TYPE_CHECKING:
@@ -17,6 +18,51 @@ import struct
 
 from .ingestion import EdgeList, NodeList
 from .sampling import SamplingPattern, as_sampling_pattern
+
+
+def _normalize_labels(labels):
+    """Return deterministic string labels without duplicates.
+
+    Args:
+        labels: Optional iterable of label values.
+
+    Returns:
+        Tuple of string labels preserving first-seen order.
+
+    Examples:
+        >>> _normalize_labels(["Drug", "Drug", "Compound"])
+        ('Drug', 'Compound')
+    """
+    if labels is None:
+        return tuple()
+    return tuple(dict.fromkeys(str(label) for label in labels))
+
+
+def _property_value_to_index_bytes(value) -> bytes:
+    """Encode a property value for exact-match sorted indexes.
+
+    Args:
+        value: JSON-like property value, with bytes supported through tagging.
+
+    Returns:
+        Stable UTF-8 bytes suitable for sorted exact-match index keys.
+
+    Examples:
+        >>> _property_value_to_index_bytes("drug")
+        b'"drug"'
+    """
+    def normalize(item):
+        if isinstance(item, bytes):
+            return {"__pygraphdb_type__": "bytes", "value": base64.b64encode(item).decode("ascii")}
+        if isinstance(item, tuple):
+            return [normalize(value) for value in item]
+        if isinstance(item, list):
+            return [normalize(value) for value in item]
+        if isinstance(item, dict):
+            return {str(key): normalize(value) for key, value in sorted(item.items())}
+        return item
+
+    return json.dumps(normalize(value), sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 def datetime_to_bytes(dt: datetime.datetime, tzinfo = datetime.timezone.utc) -> bytes:
     """Convert a datetime to big-endian microseconds since the Unix epoch.
@@ -65,21 +111,26 @@ def bytes_to_datetime(b: bytes, tzinfo = datetime.timezone.utc) -> datetime.date
 # =========================================
 
 class Node:
-    """Graph node with an ID and arbitrary properties.
+    """Graph node with an ID, native labels, and arbitrary properties.
 
     Args:
         node_id: Optional stable node identifier. A UUID is generated when omitted.
         properties: Optional dictionary of node attributes.
+        labels: Optional iterable of node labels. Labels are stored natively and
+            maintained in the label index by ``GraphDB``.
 
     Examples:
-        >>> Node(node_id="drug-1", properties={"kind": "drug"}).get_id
+        >>> Node(node_id="drug-1", labels=["Drug"], properties={"kind": "drug"}).get_id
         'drug-1'
+        >>> Node(node_id="drug-1", labels=["Drug", "Drug"]).labels
+        ('Drug',)
     """
 
-    def __init__(self, node_id=None, properties=None):
-        """If no node_id is provided, generate a UUID."""
+    def __init__(self, node_id=None, properties=None, labels=None):
+        """Initialize a node, generating a UUID when ``node_id`` is omitted."""
         self._id = node_id or str(uuid.uuid4())
         self.properties = properties or {}
+        self.labels = _normalize_labels(labels)
 
     @property
     def get_id(self):
@@ -97,16 +148,37 @@ class Node:
         return self._id.encode('utf-8')
 
     def to_dict(self):
-        """Convert to a dictionary form for serialization."""
+        """Convert to a dictionary form for serialization.
+
+        Returns:
+            Dictionary containing ``id``, ``properties``, and ``labels``.
+
+        Examples:
+            >>> Node(node_id="n1", labels=["Drug"]).to_dict()["labels"]
+            ['Drug']
+        """
         return {
             'id': self._id,
-            'properties': self.properties
+            'properties': self.properties,
+            'labels': list(self.labels),
         }
 
     @classmethod
     def from_dict(cls, data: dict):
-        """Factory from dictionary."""
-        return cls(node_id=data['id'], properties=data['properties'])
+        """Create a node from serialized dictionary data.
+
+        Args:
+            data: Dictionary produced by ``to_dict``. Older dictionaries without
+                ``labels`` deserialize with an empty label tuple.
+
+        Returns:
+            ``Node`` instance.
+
+        Examples:
+            >>> Node.from_dict({"id": "n1", "properties": {}}).labels
+            ()
+        """
+        return cls(node_id=data['id'], properties=data['properties'], labels=data.get('labels'))
 
 class Edge:
     """Directed graph edge with source, target, and properties.
@@ -297,18 +369,33 @@ class GraphDB:
     def __init__(
             self, 
             store: KVStore, 
-            serializer: Serializer
+            serializer: Serializer,
+            indexed_node_properties: Optional[list[str]] = None,
+            indexed_edge_properties: Optional[list[str]] = None,
         ):
-        """
-        :param store: An instance of KVStore (e.g. LMDBStore or LevelDBStore),
-                      which implements specialized node/edge methods
-        :param serializer: A serializer instance (PickleSerializer, JSONSerializer, etc.)
+        """Initialize a graph database wrapper.
+
+        Args:
+            store: ``KVStore`` instance such as ``LMDBStore``, ``LevelDBStore``,
+                or ``PyRexStore``.
+            serializer: Serializer for node, edge, and adjacency payloads.
+            indexed_node_properties: Optional exact-match node property indexes
+                to maintain for future writes.
+            indexed_edge_properties: Optional exact-match edge property indexes
+                to maintain for future writes.
+
+        Examples:
+            >>> from pygraphdb.kvstores import LMDBStore
+            >>> from pygraphdb.serializers import PickleSerializer
+            >>> graph = GraphDB(LMDBStore(path="/tmp/example"), PickleSerializer(), indexed_node_properties=["name"])  # doctest: +SKIP
         """
         self.store = store
         self.serializer = serializer
         self.entity_serializer = GraphEntityDictSerializer(
             self.serializer
         )
+        self.indexed_node_properties = set(indexed_node_properties or [])
+        self.indexed_edge_properties = set(indexed_edge_properties or [])
 
     # -----------
     # Node Methods
@@ -322,8 +409,12 @@ class GraphDB:
         Examples:
             >>> graph_db.put_node(Node(node_id="drug-1"))  # doctest: +SKIP
         """
+        old_node = self.get_node(node.get_id_bytes)
+        if old_node is not None:
+            self._delete_node_indexes(old_node)
         value = self.entity_serializer.serialize(node, 'Node')
         self.store.put_node(node.get_id_bytes, value)
+        self._put_node_indexes(node)
 
     def get_node(self, node_id) -> Node:
         """Return a node by byte key.
@@ -354,7 +445,164 @@ class GraphDB:
         Examples:
             >>> graph_db.delete_node(b"drug-1")  # doctest: +SKIP
         """
+        old_node = self.get_node(node_id)
+        if old_node is not None:
+            self._delete_node_indexes(old_node)
         self.store.delete_node(node_id)
+
+    def _put_node_indexes(self, node: Node):
+        """Maintain label and configured exact property indexes for a node."""
+        entries = []
+        node_id = node.get_id_bytes
+        for label in node.labels:
+            entries.append(("node_label", [label.encode("utf-8")], node_id))
+        for property_name in self.indexed_node_properties:
+            if property_name in node.properties:
+                entries.append((
+                    "node_property",
+                    [property_name.encode("utf-8"), _property_value_to_index_bytes(node.properties[property_name])],
+                    node_id,
+                ))
+        if entries:
+            self.store.put_index_entries_bulk(entries)
+
+    def _delete_node_indexes(self, node: Node):
+        """Remove label and configured exact property indexes for a node."""
+        node_id = node.get_id_bytes
+        for label in node.labels:
+            self.store.delete_index_entry("node_label", [label.encode("utf-8")], node_id)
+        for property_name in self.indexed_node_properties:
+            if property_name in node.properties:
+                self.store.delete_index_entry(
+                    "node_property",
+                    [property_name.encode("utf-8"), _property_value_to_index_bytes(node.properties[property_name])],
+                    node_id,
+                )
+
+    def create_node_property_index(self, property_name: str):
+        """Register and rebuild an exact-match node property index.
+
+        Args:
+            property_name: Node property to index for exact-match lookup.
+
+        Returns:
+            Number of existing nodes added to the index.
+
+        Examples:
+            >>> graph_db.create_node_property_index("kind")  # doctest: +SKIP
+            10
+        """
+        self.indexed_node_properties.add(property_name)
+        return self.rebuild_node_property_index(property_name)
+
+    def rebuild_node_property_index(self, property_name: str):
+        """Rebuild an exact-match node property index from stored nodes.
+
+        Args:
+            property_name: Node property to index.
+
+        Returns:
+            Number of indexed node records.
+
+        Examples:
+            >>> graph_db.rebuild_node_property_index("name")  # doctest: +SKIP
+            3
+        """
+        rebuilt = 0
+        for node_id in self.store.get_node_keys_generator():
+            node = self.get_node(node_id)
+            if node is None or property_name not in node.properties:
+                continue
+            self.store.put_index_entry(
+                "node_property",
+                [property_name.encode("utf-8"), _property_value_to_index_bytes(node.properties[property_name])],
+                node.get_id_bytes,
+            )
+            rebuilt += 1
+        return rebuilt
+
+    def rebuild_label_index(self):
+        """Rebuild the node label index from stored nodes.
+
+        Returns:
+            Number of label index entries written.
+
+        Examples:
+            >>> graph_db.rebuild_label_index()  # doctest: +SKIP
+            12
+        """
+        rebuilt = 0
+        for node_id in self.store.get_node_keys_generator():
+            node = self.get_node(node_id)
+            if node is None:
+                continue
+            for label in node.labels:
+                self.store.put_index_entry("node_label", [label.encode("utf-8")], node.get_id_bytes)
+                rebuilt += 1
+        return rebuilt
+
+    def iter_node_ids_by_label(self, label: str):
+        """Yield node IDs from the label index.
+
+        Args:
+            label: Node label to scan.
+
+        Yields:
+            Node ID bytes with the requested label.
+
+        Examples:
+            >>> list(graph_db.iter_node_ids_by_label("Drug"))  # doctest: +SKIP
+            [b'drug-1']
+        """
+        yield from self.store.iter_index_prefix("node_label", [label.encode("utf-8")])
+
+    def nodes_by_label(self, label: str):
+        """Return nodes with a label using the label index.
+
+        Args:
+            label: Node label to scan.
+
+        Returns:
+            List of decoded ``Node`` objects.
+
+        Examples:
+            >>> graph_db.nodes_by_label("Drug")  # doctest: +SKIP
+        """
+        return [self.get_node(node_id) for node_id in self.iter_node_ids_by_label(label)]
+
+    def iter_node_ids_by_property(self, property_name: str, value):
+        """Yield node IDs from an exact-match property index.
+
+        Args:
+            property_name: Indexed node property name.
+            value: Exact property value to match.
+
+        Yields:
+            Node ID bytes matching the property value.
+
+        Examples:
+            >>> list(graph_db.iter_node_ids_by_property("kind", "drug"))  # doctest: +SKIP
+            [b'drug-1']
+        """
+        yield from self.store.iter_index_prefix(
+            "node_property",
+            [property_name.encode("utf-8"), _property_value_to_index_bytes(value)],
+        )
+
+    def nodes_by_property(self, property_name: str, value):
+        """Return nodes using an exact-match property index.
+
+        Args:
+            property_name: Indexed node property name.
+            value: Exact property value to match.
+
+        Returns:
+            List of decoded ``Node`` objects.
+
+        Examples:
+            >>> graph_db.nodes_by_property("kind", "drug")  # doctest: +SKIP
+        """
+        return [self.get_node(node_id) for node_id in self.iter_node_ids_by_property(property_name, value)]
 
     def node_key_to_bytes(self, node_key):
         """Normalize a node key to bytes.
@@ -439,9 +687,11 @@ class GraphDB:
         old_edge = self.get_edge(edge.get_id_bytes)
         if old_edge is not None:
             self._delete_typed_adjacency_for_edge(old_edge)
+            self._delete_edge_indexes(old_edge)
         value = self.entity_serializer.serialize(edge,'Edge')
         self.store.put_edge(edge.get_id_bytes, value)
         self._put_typed_adjacency_for_edge(edge)
+        self._put_edge_indexes(edge)
         if update_adjacency:
             # Get the edge lists from the adjacency store, 
             # and if they exist update them, if they don't exist 
@@ -489,6 +739,162 @@ class GraphDB:
             edge_type,
             edge.get_id_bytes,
         )
+
+    def _put_edge_indexes(self, edge: Edge):
+        """Maintain relationship type and configured exact property indexes."""
+        entries = []
+        edge_type = self.edge_type(edge)
+        edge_id = edge.get_id_bytes
+        if edge_type is not None:
+            entries.append(("edge_type", [str(edge_type).encode("utf-8")], edge_id))
+        for property_name in self.indexed_edge_properties:
+            if property_name in edge.properties:
+                entries.append((
+                    "edge_property",
+                    [property_name.encode("utf-8"), _property_value_to_index_bytes(edge.properties[property_name])],
+                    edge_id,
+                ))
+        if entries:
+            self.store.put_index_entries_bulk(entries)
+
+    def _delete_edge_indexes(self, edge: Edge):
+        """Remove relationship type and configured exact property indexes."""
+        edge_type = self.edge_type(edge)
+        edge_id = edge.get_id_bytes
+        if edge_type is not None:
+            self.store.delete_index_entry("edge_type", [str(edge_type).encode("utf-8")], edge_id)
+        for property_name in self.indexed_edge_properties:
+            if property_name in edge.properties:
+                self.store.delete_index_entry(
+                    "edge_property",
+                    [property_name.encode("utf-8"), _property_value_to_index_bytes(edge.properties[property_name])],
+                    edge_id,
+                )
+
+    def rebuild_relationship_type_index(self):
+        """Rebuild the relationship type catalog from stored edges.
+
+        Returns:
+            Number of typed edge records indexed.
+
+        Examples:
+            >>> graph_db.rebuild_relationship_type_index()  # doctest: +SKIP
+            20
+        """
+        rebuilt = 0
+        for edge_id in self.store.get_edge_keys_generator():
+            edge = self.get_edge(edge_id)
+            edge_type = None if edge is None else self.edge_type(edge)
+            if edge_type is None:
+                continue
+            self.store.put_index_entry("edge_type", [str(edge_type).encode("utf-8")], edge.get_id_bytes)
+            rebuilt += 1
+        return rebuilt
+
+    def create_edge_property_index(self, property_name: str):
+        """Register and rebuild an exact-match edge property index.
+
+        Args:
+            property_name: Edge property to index for exact-match lookup.
+
+        Returns:
+            Number of existing edges added to the index.
+
+        Examples:
+            >>> graph_db.create_edge_property_index("score")  # doctest: +SKIP
+            7
+        """
+        self.indexed_edge_properties.add(property_name)
+        return self.rebuild_edge_property_index(property_name)
+
+    def rebuild_edge_property_index(self, property_name: str):
+        """Rebuild an exact-match edge property index from stored edges.
+
+        Args:
+            property_name: Edge property to index.
+
+        Returns:
+            Number of indexed edge records.
+
+        Examples:
+            >>> graph_db.rebuild_edge_property_index("score")  # doctest: +SKIP
+            7
+        """
+        rebuilt = 0
+        for edge_id in self.store.get_edge_keys_generator():
+            edge = self.get_edge(edge_id)
+            if edge is None or property_name not in edge.properties:
+                continue
+            self.store.put_index_entry(
+                "edge_property",
+                [property_name.encode("utf-8"), _property_value_to_index_bytes(edge.properties[property_name])],
+                edge.get_id_bytes,
+            )
+            rebuilt += 1
+        return rebuilt
+
+    def iter_edge_ids_by_type(self, edge_type: str):
+        """Yield edge IDs from the relationship type catalog.
+
+        Args:
+            edge_type: Relationship type stored in ``edge.properties["type"]``.
+
+        Yields:
+            Edge ID bytes with the requested relationship type.
+
+        Examples:
+            >>> list(graph_db.iter_edge_ids_by_type("drug-to-protein"))  # doctest: +SKIP
+            [b'd1-p1']
+        """
+        yield from self.store.iter_index_prefix("edge_type", [str(edge_type).encode("utf-8")])
+
+    def edges_by_type(self, edge_type: str):
+        """Return edges using the relationship type catalog.
+
+        Args:
+            edge_type: Relationship type stored in ``edge.properties["type"]``.
+
+        Returns:
+            List of decoded ``Edge`` objects.
+
+        Examples:
+            >>> graph_db.edges_by_type("drug-to-protein")  # doctest: +SKIP
+        """
+        return [self.get_edge(edge_id) for edge_id in self.iter_edge_ids_by_type(edge_type)]
+
+    def iter_edge_ids_by_property(self, property_name: str, value):
+        """Yield edge IDs from an exact-match edge property index.
+
+        Args:
+            property_name: Indexed edge property name.
+            value: Exact property value to match.
+
+        Yields:
+            Edge ID bytes matching the property value.
+
+        Examples:
+            >>> list(graph_db.iter_edge_ids_by_property("score", 1))  # doctest: +SKIP
+            [b'e1']
+        """
+        yield from self.store.iter_index_prefix(
+            "edge_property",
+            [property_name.encode("utf-8"), _property_value_to_index_bytes(value)],
+        )
+
+    def edges_by_property(self, property_name: str, value):
+        """Return edges using an exact-match property index.
+
+        Args:
+            property_name: Indexed edge property name.
+            value: Exact property value to match.
+
+        Returns:
+            List of decoded ``Edge`` objects.
+
+        Examples:
+            >>> graph_db.edges_by_property("score", 1)  # doctest: +SKIP
+        """
+        return [self.get_edge(edge_id) for edge_id in self.iter_edge_ids_by_property(property_name, value)]
 
     def get_typed_adjacency(self, node_id, edge_type: str, direction: str = 'out'):
         """Return typed adjacency records with clean direction semantics.
@@ -774,13 +1180,33 @@ class GraphDB:
     # Bulk put of nodes
     # --------------------------------
     def put_nodes(self, nodes: list[Node]):
-        """
-        Convert each Node to bytes using the serializer, then call store.put_nodes_bulk(...)
+        """Store multiple nodes and maintain label/property indexes.
+
+        Args:
+            nodes: Nodes to serialize and write.
+
+        Examples:
+            >>> graph_db.put_nodes([Node(node_id="drug-1", labels=["Drug"])])  # doctest: +SKIP
         """
         to_store = {}
+        index_entries = []
         for n in nodes:
+            old_node = self.get_node(n.get_id_bytes)
+            if old_node is not None:
+                self._delete_node_indexes(old_node)
             to_store[n.get_id_bytes] = self.entity_serializer.serialize(n, 'Node')
+            for label in n.labels:
+                index_entries.append(("node_label", [label.encode("utf-8")], n.get_id_bytes))
+            for property_name in self.indexed_node_properties:
+                if property_name in n.properties:
+                    index_entries.append((
+                        "node_property",
+                        [property_name.encode("utf-8"), _property_value_to_index_bytes(n.properties[property_name])],
+                        n.get_id_bytes,
+                    ))
         self.store.put_nodes_bulk(to_store)
+        if index_entries:
+            self.store.put_index_entries_bulk(index_entries)
 
     def ingest_nodes_arrow(self, node_ids, node_values, *, native: bool = True, chunk_size: int = 100_000):
         """Ingest attributed nodes from Arrow-like columns.
@@ -920,6 +1346,7 @@ class GraphDB:
             return  # Edge not found
 
         self._delete_typed_adjacency_for_edge(e)
+        self._delete_edge_indexes(e)
 
         # Remove edge_id from adjacency of source
         _source_edge_bytes = edge_key_serializer(e.source)
@@ -994,8 +1421,8 @@ class GraphDB:
         Args:
             edges: Edges to write.
             check_existing: When true, read existing edges first and remove stale
-                typed adjacency records before replacement. Set to false for
-                append-only ingestion with new edge IDs.
+                typed adjacency and sorted index records before replacement. Set
+                to false for append-only ingestion with new edge IDs.
 
         Examples:
             >>> graph_db.put_edges_bulk([Edge(source="drug-1", target="protein-1")], check_existing=False)  # doctest: +SKIP
@@ -1003,6 +1430,7 @@ class GraphDB:
         # 1) Build a dict[edge_id, bytes] to store all edges in one go
         edge_dict = {}
         typed_adjacency_records = []
+        index_entries = []
         # 2) Accumulate adjacency changes in memory: node_id -> set(edge_ids)
         adjacency_accumulator = {} # the keys are "nodes" and the values are sets of edges for where the nodes appear as source or destinations (separately). 
         # adjacency_accumulator_target = {}
@@ -1012,6 +1440,7 @@ class GraphDB:
                 old_edge = self.get_edge(e.get_id_bytes)
                 if old_edge is not None:
                     self._delete_typed_adjacency_for_edge(old_edge)
+                    self._delete_edge_indexes(old_edge)
             e_bytes = self.entity_serializer.serialize(e, 'Edge')
             _source = self.node_key_to_bytes(e.source)
             _target = self.node_key_to_bytes(e.target)
@@ -1019,6 +1448,14 @@ class GraphDB:
             edge_type = self.edge_type(e)
             if edge_type is not None:
                 typed_adjacency_records.append((_source, _target, edge_type, e.get_id_bytes))
+                index_entries.append(("edge_type", [str(edge_type).encode("utf-8")], e.get_id_bytes))
+            for property_name in self.indexed_edge_properties:
+                if property_name in e.properties:
+                    index_entries.append((
+                        "edge_property",
+                        [property_name.encode("utf-8"), _property_value_to_index_bytes(e.properties[property_name])],
+                        e.get_id_bytes,
+                    ))
             # adjacency accum update
             adjacency_accumulator.setdefault(_source, {'target' : [], 'source' : []})
             adjacency_accumulator[_source]['source'].append(e.get_id_bytes)
@@ -1028,6 +1465,8 @@ class GraphDB:
         # 3) Use the store's put_edges_bulk
         self.store.put_edges_bulk(edge_dict)
         self.store.put_typed_adjacency_bulk(typed_adjacency_records)
+        if index_entries:
+            self.store.put_index_entries_bulk(index_entries)
 
 
         # 4) Build adjacency dict so we do one read+write per node
@@ -1138,10 +1577,17 @@ class GraphDB:
         return len(edge_list.edge_ids)
 
     def query(self, cypher: str):
-        """Execute a minimal read-only Cypher query.
+        """Execute a supported read-only Cypher query.
 
-        The initial supported subset is one anchored, outgoing, typed traversal:
-        ``MATCH (a {id: "node-id"})-[:EDGE_TYPE]->(b) RETURN a, b``.
+        Args:
+            cypher: Query text in the supported PyGraphDB Cypher subset.
+
+        Returns:
+            ``pygraphdb.cypher.QueryResult`` containing projected records.
+
+        Examples:
+            >>> graph_db.query('MATCH (n:Drug) RETURN n')  # doctest: +SKIP
+            >>> graph_db.query('MATCH (a {id: "drug-1"})-[:drug-to-protein]->(b) RETURN a, b')  # doctest: +SKIP
         """
         from .cypher import execute
 

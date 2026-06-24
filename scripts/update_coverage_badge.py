@@ -24,7 +24,7 @@ def run_coverage() -> int:
         ) from exc
 
     subprocess.run(
-        [sys.executable, "-m", "coverage", "run", "--source=src/pygraphdb", "-m", "unittest", "test.py"],
+        [sys.executable, "-m", "coverage", "run", "--source=src/pygraphdb", "-m", "pytest", "tests"],
         cwd=ROOT,
         check=True,
     )
