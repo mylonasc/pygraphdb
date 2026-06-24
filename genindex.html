@@ -1,0 +1,1206 @@
+<!doctype html>
+<html class="no-js" lang="en" data-content_root="./">
+  <head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="color-scheme" content="light dark"><link rel="index" title="Index" href="#"><link rel="search" title="Search" href="search.html">
+
+    <!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 --><title>Index - PyGraphDB</title>
+<link rel="stylesheet" type="text/css" href="_static/pygments.css?v=d111a655" />
+    <link rel="stylesheet" type="text/css" href="_static/styles/furo.css?v=7bdb33bb" />
+    <link rel="stylesheet" type="text/css" href="_static/styles/furo-extensions.css?v=8dab3a3b" />
+    
+    
+
+
+<style>
+  body {
+    --color-code-background: #f2f2f2;
+  --color-code-foreground: #1e1e1e;
+  
+  }
+  @media not print {
+    body[data-theme="dark"] {
+      --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  
+    }
+    @media (prefers-color-scheme: dark) {
+      body:not([data-theme="light"]) {
+        --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  
+      }
+    }
+  }
+</style></head>
+  <body>
+    
+    <script>
+      document.body.dataset.theme = localStorage.getItem("theme") || "auto";
+    </script>
+    
+
+<svg xmlns="http://www.w3.org/2000/svg" style="display: none;">
+  <symbol id="svg-toc" viewBox="0 0 24 24">
+    <title>Contents</title>
+    <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 1024 1024">
+      <path d="M408 442h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8zm-8 204c0 4.4 3.6 8 8 8h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56zm504-486H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zm0 632H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zM115.4 518.9L271.7 642c5.8 4.6 14.4.5 14.4-6.9V388.9c0-7.4-8.5-11.5-14.4-6.9L115.4 505.1a8.74 8.74 0 0 0 0 13.8z"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-menu" viewBox="0 0 24 24">
+    <title>Menu</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-menu">
+      <line x1="3" y1="12" x2="21" y2="12"></line>
+      <line x1="3" y1="6" x2="21" y2="6"></line>
+      <line x1="3" y1="18" x2="21" y2="18"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-arrow-right" viewBox="0 0 24 24">
+    <title>Expand</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-chevron-right">
+      <polyline points="9 18 15 12 9 6"></polyline>
+    </svg>
+  </symbol>
+  <symbol id="svg-sun" viewBox="0 0 24 24">
+    <title>Light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="feather-sun">
+      <circle cx="12" cy="12" r="5"></circle>
+      <line x1="12" y1="1" x2="12" y2="3"></line>
+      <line x1="12" y1="21" x2="12" y2="23"></line>
+      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+      <line x1="1" y1="12" x2="3" y2="12"></line>
+      <line x1="21" y1="12" x2="23" y2="12"></line>
+      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon" viewBox="0 0 24 24">
+    <title>Dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-moon">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454z" />
+    </svg>
+  </symbol>
+  <symbol id="svg-sun-with-moon" viewBox="0 0 24 24">
+    <title>Auto light/dark, in light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path style="opacity: 50%" d="M 5.411 14.504 C 5.471 14.504 5.532 14.504 5.591 14.504 C 3.639 16.319 4.383 19.569 6.931 20.352 C 7.693 20.586 8.512 20.551 9.25 20.252 C 8.023 23.207 4.056 23.725 2.11 21.184 C 0.166 18.642 1.702 14.949 4.874 14.536 C 5.051 14.512 5.231 14.5 5.411 14.5 L 5.411 14.504 Z"/>
+      <line x1="14.5" y1="3.25" x2="14.5" y2="1.25"/>
+      <line x1="14.5" y1="15.85" x2="14.5" y2="17.85"/>
+      <line x1="10.044" y1="5.094" x2="8.63" y2="3.68"/>
+      <line x1="19" y1="14.05" x2="20.414" y2="15.464"/>
+      <line x1="8.2" y1="9.55" x2="6.2" y2="9.55"/>
+      <line x1="20.8" y1="9.55" x2="22.8" y2="9.55"/>
+      <line x1="10.044" y1="14.006" x2="8.63" y2="15.42"/>
+      <line x1="19" y1="5.05" x2="20.414" y2="3.636"/>
+      <circle cx="14.5" cy="9.55" r="3.6"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon-with-sun" viewBox="0 0 24 24">
+    <title>Auto light/dark, in dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path d="M 8.282 7.007 C 8.385 7.007 8.494 7.007 8.595 7.007 C 5.18 10.184 6.481 15.869 10.942 17.24 C 12.275 17.648 13.706 17.589 15 17.066 C 12.851 22.236 5.91 23.143 2.505 18.696 C -0.897 14.249 1.791 7.786 7.342 7.063 C 7.652 7.021 7.965 7 8.282 7 L 8.282 7.007 Z"/>
+      <line style="opacity: 50%" x1="18" y1="3.705" x2="18" y2="2.5"/>
+      <line style="opacity: 50%" x1="18" y1="11.295" x2="18" y2="12.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="4.816" x2="14.464" y2="3.964"/>
+      <line style="opacity: 50%" x1="20.711" y1="10.212" x2="21.563" y2="11.063"/>
+      <line style="opacity: 50%" x1="14.205" y1="7.5" x2="13.001" y2="7.5"/>
+      <line style="opacity: 50%" x1="21.795" y1="7.5" x2="23" y2="7.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="10.184" x2="14.464" y2="11.036"/>
+      <line style="opacity: 50%" x1="20.711" y1="4.789" x2="21.563" y2="3.937"/>
+      <circle style="opacity: 50%" cx="18" cy="7.5" r="2.169"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-pencil" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-pencil-code">
+      <path d="M4 20h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4" />
+      <path d="M13.5 6.5l4 4" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+  <symbol id="svg-eye" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-eye-code">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" />
+      <path
+        d="M11.11 17.958c-3.209 -.307 -5.91 -2.293 -8.11 -5.958c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6c-.21 .352 -.427 .688 -.647 1.008" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+</svg>
+
+<input type="checkbox" class="sidebar-toggle" name="__navigation" id="__navigation" aria-label="Toggle site navigation sidebar">
+<input type="checkbox" class="sidebar-toggle" name="__toc" id="__toc" aria-label="Toggle table of contents sidebar">
+<label class="overlay sidebar-overlay" for="__navigation"></label>
+<label class="overlay toc-overlay" for="__toc"></label>
+
+<a class="skip-to-content muted-link" href="#furo-main-content">Skip to content</a>
+
+
+
+<div class="page">
+  <header class="mobile-header">
+    <div class="header-left">
+      <label class="nav-overlay-icon" for="__navigation">
+        <span class="icon"><svg><use href="#svg-menu"></use></svg></span>
+      </label>
+    </div>
+    <div class="header-center">
+      <a href="index.html"><div class="brand">PyGraphDB</div></a>
+    </div>
+    <div class="header-right">
+      <div class="theme-toggle-container theme-toggle-header">
+        <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+          <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+          <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+          <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+          <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+        </button>
+      </div>
+      <label class="toc-overlay-icon toc-header-icon no-toc" for="__toc">
+        <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+      </label>
+    </div>
+  </header>
+  <aside class="sidebar-drawer">
+    <div class="sidebar-container">
+      
+      <div class="sidebar-sticky"><a class="sidebar-brand" href="index.html">
+  
+  <span class="sidebar-brand-text">PyGraphDB</span>
+  
+</a><form class="sidebar-search-container" method="get" action="search.html" role="search">
+  <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
+  <input type="hidden" name="check_keywords" value="yes">
+  <input type="hidden" name="area" value="default">
+</form>
+<div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+  <p class="caption" role="heading"><span class="caption-text">User Guide</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="quickstart.html">Quickstart</a></li>
+<li class="toctree-l1"><a class="reference internal" href="storage-backends.html">Storage Backends</a></li>
+<li class="toctree-l1"><a class="reference internal" href="serializers.html">Serializers</a></li>
+<li class="toctree-l1"><a class="reference internal" href="typed-sampling.html">Typed Traversal and Sampling</a></li>
+<li class="toctree-l1"><a class="reference internal" href="cypher.html">Cypher Queries</a></li>
+<li class="toctree-l1"><a class="reference internal" href="performance.html">Performance and RocksDB Tuning</a></li>
+<li class="toctree-l1"><a class="reference internal" href="notebooks.html">Notebook Usage</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">API Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="api.html">API Reference</a></li>
+</ul>
+
+</div>
+</div>
+
+      </div>
+      
+    </div>
+  </aside>
+  <div class="main">
+    <div class="content">
+      <div class="article-container">
+        <a href="#" class="back-to-top muted-link">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+            <path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8v12z"></path>
+          </svg>
+          <span>Back to top</span>
+        </a>
+        <div class="content-icon-container">
+          <div class="theme-toggle-container theme-toggle-content">
+            <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+              <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+              <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+              <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+              <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+            </button>
+          </div>
+          <label class="toc-overlay-icon toc-content-icon no-toc" for="__toc">
+            <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+          </label>
+        </div>
+        <article role="main" id="furo-main-content">
+          
+<section class="genindex-section">
+  <h1 id="index">Index</h1>
+  <div class="genindex-jumpbox"><a href="#_"><strong>_</strong></a> | <a href="#A"><strong>A</strong></a> | <a href="#B"><strong>B</strong></a> | <a href="#C"><strong>C</strong></a> | <a href="#D"><strong>D</strong></a> | <a href="#E"><strong>E</strong></a> | <a href="#F"><strong>F</strong></a> | <a href="#G"><strong>G</strong></a> | <a href="#H"><strong>H</strong></a> | <a href="#I"><strong>I</strong></a> | <a href="#J"><strong>J</strong></a> | <a href="#K"><strong>K</strong></a> | <a href="#L"><strong>L</strong></a> | <a href="#M"><strong>M</strong></a> | <a href="#N"><strong>N</strong></a> | <a href="#P"><strong>P</strong></a> | <a href="#Q"><strong>Q</strong></a> | <a href="#R"><strong>R</strong></a> | <a href="#S"><strong>S</strong></a> | <a href="#T"><strong>T</strong></a> | <a href="#U"><strong>U</strong></a> | <a href="#V"><strong>V</strong></a></div>
+</section>
+<section id="_" class="genindex-section">
+  <h2>_</h2>
+  <table style="width: 100%" class="indextable genindextable"><tr>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#pygraphdb.graphdb.Edge.__init__">__init__() (pygraphdb.graphdb.Edge method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.graphdb.GraphDB.__init__">(pygraphdb.graphdb.GraphDB method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.graphdb.GraphEntityDictSerializer.__init__">(pygraphdb.graphdb.GraphEntityDictSerializer method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.graphdb.Node.__init__">(pygraphdb.graphdb.Node method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.graphdb.TimeIndexedEdge.__init__">(pygraphdb.graphdb.TimeIndexedEdge method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.LevelDBStore.__init__">(pygraphdb.kvstores.LevelDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.LMDBStore.__init__">(pygraphdb.kvstores.LMDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.PyRexStore.__init__">(pygraphdb.kvstores.PyRexStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.SimpleIndexCounterKVStore.__init__">(pygraphdb.kvstores.SimpleIndexCounterKVStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.SimpleKV.__init__">(pygraphdb.kvstores.SimpleKV method)</a>
+</li>
+        </ul></li>
+    </ul></td>
+  </tr></table>
+</section>
+
+<section id="A" class="genindex-section">
+  <h2>A</h2>
+  <table style="width: 100%" class="indextable genindextable"><tr>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#pygraphdb.sampling.as_sampling_hop">as_sampling_hop() (in module pygraphdb.sampling)</a>
+</li>
+    </ul></td>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#pygraphdb.sampling.as_sampling_pattern">as_sampling_pattern() (in module pygraphdb.sampling)</a>
+</li>
+    </ul></td>
+  </tr></table>
+</section>
+
+<section id="B" class="genindex-section">
+  <h2>B</h2>
+  <table style="width: 100%" class="indextable genindextable"><tr>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.bfs">bfs() (pygraphdb.graphdb.GraphDB method)</a>
+</li>
+    </ul></td>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#pygraphdb.graphdb.bytes_to_datetime">bytes_to_datetime() (in module pygraphdb.graphdb)</a>
+</li>
+    </ul></td>
+  </tr></table>
+</section>
+
+<section id="C" class="genindex-section">
+  <h2>C</h2>
+  <table style="width: 100%" class="indextable genindextable"><tr>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#pygraphdb.ingestion.EdgeList.chunks">chunks() (pygraphdb.ingestion.EdgeList method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.ingestion.NodeList.chunks">(pygraphdb.ingestion.NodeList method)</a>
+</li>
+        </ul></li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.close">close() (pygraphdb.graphdb.GraphDB method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.kvstores.KVStore.close">(pygraphdb.kvstores.KVStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.LevelDBStore.close">(pygraphdb.kvstores.LevelDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.LMDBStore.close">(pygraphdb.kvstores.LMDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.PyRexStore.close">(pygraphdb.kvstores.PyRexStore method)</a>
+</li>
+        </ul></li>
+    </ul></td>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#pygraphdb.cypher.QueryResult.columns">columns (pygraphdb.cypher.QueryResult attribute)</a>
+</li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.create_edge_property_index">create_edge_property_index() (pygraphdb.graphdb.GraphDB method)</a>
+</li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.create_node_property_index">create_node_property_index() (pygraphdb.graphdb.GraphDB method)</a>
+</li>
+    </ul></td>
+  </tr></table>
+</section>
+
+<section id="D" class="genindex-section">
+  <h2>D</h2>
+  <table style="width: 100%" class="indextable genindextable"><tr>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#pygraphdb.graphdb.datetime_to_bytes">datetime_to_bytes() (in module pygraphdb.graphdb)</a>
+</li>
+        <li><a href="api.html#pygraphdb.kvstores.SimpleIndexCounterKVStore.decode_db_key">decode_db_key() (pygraphdb.kvstores.SimpleIndexCounterKVStore method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.kvstores.SimpleKV.decode_db_key">(pygraphdb.kvstores.SimpleKV method)</a>
+</li>
+        </ul></li>
+        <li><a href="api.html#pygraphdb.kvstores.KVStore.delete">delete() (pygraphdb.kvstores.KVStore method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.kvstores.LMDBStore.delete">(pygraphdb.kvstores.LMDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.PyRexStore.delete">(pygraphdb.kvstores.PyRexStore method)</a>
+</li>
+        </ul></li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.delete_edge">delete_edge() (pygraphdb.graphdb.GraphDB method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.kvstores.KVStore.delete_edge">(pygraphdb.kvstores.KVStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.LevelDBStore.delete_edge">(pygraphdb.kvstores.LevelDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.LMDBStore.delete_edge">(pygraphdb.kvstores.LMDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.PyRexStore.delete_edge">(pygraphdb.kvstores.PyRexStore method)</a>
+</li>
+        </ul></li>
+        <li><a href="api.html#pygraphdb.kvstores.KVStore.delete_index_entry">delete_index_entry() (pygraphdb.kvstores.KVStore method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.kvstores.LevelDBStore.delete_index_entry">(pygraphdb.kvstores.LevelDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.LMDBStore.delete_index_entry">(pygraphdb.kvstores.LMDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.PyRexStore.delete_index_entry">(pygraphdb.kvstores.PyRexStore method)</a>
+</li>
+        </ul></li>
+    </ul></td>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.delete_node">delete_node() (pygraphdb.graphdb.GraphDB method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.kvstores.KVStore.delete_node">(pygraphdb.kvstores.KVStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.LevelDBStore.delete_node">(pygraphdb.kvstores.LevelDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.LMDBStore.delete_node">(pygraphdb.kvstores.LMDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.PyRexStore.delete_node">(pygraphdb.kvstores.PyRexStore method)</a>
+</li>
+        </ul></li>
+        <li><a href="api.html#pygraphdb.kvstores.KVStore.delete_typed_adjacency">delete_typed_adjacency() (pygraphdb.kvstores.KVStore method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.kvstores.LevelDBStore.delete_typed_adjacency">(pygraphdb.kvstores.LevelDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.LMDBStore.delete_typed_adjacency">(pygraphdb.kvstores.LMDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.PyRexStore.delete_typed_adjacency">(pygraphdb.kvstores.PyRexStore method)</a>
+</li>
+        </ul></li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphEntityDictSerializer.deserialize">deserialize() (pygraphdb.graphdb.GraphEntityDictSerializer method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.serializers.JSONSerializer.deserialize">(pygraphdb.serializers.JSONSerializer method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.serializers.MessagePackSerializer.deserialize">(pygraphdb.serializers.MessagePackSerializer method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.serializers.PickleSerializer.deserialize">(pygraphdb.serializers.PickleSerializer method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.serializers.ProtobufSerializer.deserialize">(pygraphdb.serializers.ProtobufSerializer method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.serializers.Serializer.deserialize">(pygraphdb.serializers.Serializer method)</a>
+</li>
+        </ul></li>
+        <li><a href="api.html#pygraphdb.sampling.SamplingHop.direction">direction (pygraphdb.sampling.SamplingHop attribute)</a>
+</li>
+    </ul></td>
+  </tr></table>
+</section>
+
+<section id="E" class="genindex-section">
+  <h2>E</h2>
+  <table style="width: 100%" class="indextable genindextable"><tr>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#pygraphdb.graphdb.Edge">Edge (class in pygraphdb.graphdb)</a>
+</li>
+        <li><a href="api.html#pygraphdb.ingestion.EdgeList.edge_ids">edge_ids (pygraphdb.ingestion.EdgeList attribute)</a>
+</li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.edge_key_to_bytes">edge_key_to_bytes() (pygraphdb.graphdb.GraphDB method)</a>
+</li>
+        <li><a href="api.html#pygraphdb.cypher.TraversalHop.edge_type">edge_type (pygraphdb.cypher.TraversalHop attribute)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.sampling.SamplingHop.edge_type">(pygraphdb.sampling.SamplingHop attribute)</a>
+</li>
+        </ul></li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.edge_type">edge_type() (pygraphdb.graphdb.GraphDB method)</a>
+</li>
+        <li><a href="api.html#pygraphdb.ingestion.EdgeList.edge_types">edge_types (pygraphdb.ingestion.EdgeList attribute)</a>
+</li>
+    </ul></td>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#pygraphdb.ingestion.EdgeList.edge_values">edge_values (pygraphdb.ingestion.EdgeList attribute)</a>
+</li>
+        <li><a href="api.html#pygraphdb.ingestion.EdgeList">EdgeList (class in pygraphdb.ingestion)</a>
+</li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.edges_by_edge_type">edges_by_edge_type() (pygraphdb.graphdb.GraphDB method)</a>
+</li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.edges_by_property">edges_by_property() (pygraphdb.graphdb.GraphDB method)</a>
+</li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.edges_by_type">edges_by_type() (pygraphdb.graphdb.GraphDB method)</a>
+</li>
+        <li><a href="api.html#pygraphdb.kvstores.SimpleIndexCounterKVStore.encode_db_key">encode_db_key() (pygraphdb.kvstores.SimpleIndexCounterKVStore method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.kvstores.SimpleKV.encode_db_key">(pygraphdb.kvstores.SimpleKV method)</a>
+</li>
+        </ul></li>
+        <li><a href="api.html#pygraphdb.cypher.execute">execute() (in module pygraphdb.cypher)</a>
+</li>
+    </ul></td>
+  </tr></table>
+</section>
+
+<section id="F" class="genindex-section">
+  <h2>F</h2>
+  <table style="width: 100%" class="indextable genindextable"><tr>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#pygraphdb.ingestion.EdgeList.from_arrow">from_arrow() (pygraphdb.ingestion.EdgeList class method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.ingestion.NodeList.from_arrow">(pygraphdb.ingestion.NodeList class method)</a>
+</li>
+        </ul></li>
+        <li><a href="api.html#pygraphdb.graphdb.Edge.from_dict">from_dict() (pygraphdb.graphdb.Edge class method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.graphdb.Node.from_dict">(pygraphdb.graphdb.Node class method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.graphdb.TimeIndexedEdge.from_dict">(pygraphdb.graphdb.TimeIndexedEdge class method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.sampling.SamplingHop.from_dict">(pygraphdb.sampling.SamplingHop class method)</a>
+</li>
+        </ul></li>
+    </ul></td>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#pygraphdb.sampling.SamplingPattern.from_dicts">from_dicts() (pygraphdb.sampling.SamplingPattern class method)</a>
+</li>
+        <li><a href="api.html#pygraphdb.ingestion.EdgeList.from_polars">from_polars() (pygraphdb.ingestion.EdgeList class method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.ingestion.NodeList.from_polars">(pygraphdb.ingestion.NodeList class method)</a>
+</li>
+        </ul></li>
+    </ul></td>
+  </tr></table>
+</section>
+
+<section id="G" class="genindex-section">
+  <h2>G</h2>
+  <table style="width: 100%" class="indextable genindextable"><tr>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#pygraphdb.kvstores.KVStore.get">get() (pygraphdb.kvstores.KVStore method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.kvstores.LMDBStore.get">(pygraphdb.kvstores.LMDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.PyRexStore.get">(pygraphdb.kvstores.PyRexStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.SimpleIndexCounterKVStore.get">(pygraphdb.kvstores.SimpleIndexCounterKVStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.SimpleKV.get">(pygraphdb.kvstores.SimpleKV method)</a>
+</li>
+        </ul></li>
+        <li><a href="api.html#pygraphdb.kvstores.LevelDBStore.get_adjacency">get_adjacency() (pygraphdb.kvstores.LevelDBStore method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.kvstores.LMDBStore.get_adjacency">(pygraphdb.kvstores.LMDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.PyRexStore.get_adjacency">(pygraphdb.kvstores.PyRexStore method)</a>
+</li>
+        </ul></li>
+        <li><a href="api.html#pygraphdb.kvstores.LevelDBStore.get_adjacency_bulk">get_adjacency_bulk() (pygraphdb.kvstores.LevelDBStore method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.kvstores.LMDBStore.get_adjacency_bulk">(pygraphdb.kvstores.LMDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.PyRexStore.get_adjacency_bulk">(pygraphdb.kvstores.PyRexStore method)</a>
+</li>
+        </ul></li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.get_adjacency_list">get_adjacency_list() (pygraphdb.graphdb.GraphDB method)</a>
+</li>
+        <li><a href="api.html#pygraphdb.kvstores.LevelDBStore.get_db_iterator">get_db_iterator() (pygraphdb.kvstores.LevelDBStore method)</a>
+</li>
+        <li><a href="api.html#pygraphdb.kvstores.LevelDBStore.get_db_path">get_db_path() (pygraphdb.kvstores.LevelDBStore method)</a>
+</li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.get_edge">get_edge() (pygraphdb.graphdb.GraphDB method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.kvstores.KVStore.get_edge">(pygraphdb.kvstores.KVStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.LevelDBStore.get_edge">(pygraphdb.kvstores.LevelDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.LMDBStore.get_edge">(pygraphdb.kvstores.LMDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.PyRexStore.get_edge">(pygraphdb.kvstores.PyRexStore method)</a>
+</li>
+        </ul></li>
+        <li><a href="api.html#pygraphdb.kvstores.LevelDBStore.get_edge_keys_generator">get_edge_keys_generator() (pygraphdb.kvstores.LevelDBStore method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.kvstores.LMDBStore.get_edge_keys_generator">(pygraphdb.kvstores.LMDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.PyRexStore.get_edge_keys_generator">(pygraphdb.kvstores.PyRexStore method)</a>
+</li>
+        </ul></li>
+        <li><a href="api.html#pygraphdb.kvstores.KVStore.get_edges_bulk">get_edges_bulk() (pygraphdb.kvstores.KVStore method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.kvstores.LevelDBStore.get_edges_bulk">(pygraphdb.kvstores.LevelDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.LMDBStore.get_edges_bulk">(pygraphdb.kvstores.LMDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.PyRexStore.get_edges_bulk">(pygraphdb.kvstores.PyRexStore method)</a>
+</li>
+        </ul></li>
+    </ul></td>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#pygraphdb.graphdb.Edge.get_id">get_id (pygraphdb.graphdb.Edge property)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.graphdb.Node.get_id">(pygraphdb.graphdb.Node property)</a>
+</li>
+        </ul></li>
+        <li><a href="api.html#pygraphdb.graphdb.Edge.get_id_bytes">get_id_bytes (pygraphdb.graphdb.Edge property)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.graphdb.Node.get_id_bytes">(pygraphdb.graphdb.Node property)</a>
+</li>
+          <li><a href="api.html#pygraphdb.graphdb.TimeIndexedEdge.get_id_bytes">(pygraphdb.graphdb.TimeIndexedEdge property)</a>
+</li>
+        </ul></li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.get_node">get_node() (pygraphdb.graphdb.GraphDB method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.kvstores.KVStore.get_node">(pygraphdb.kvstores.KVStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.LevelDBStore.get_node">(pygraphdb.kvstores.LevelDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.LMDBStore.get_node">(pygraphdb.kvstores.LMDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.PyRexStore.get_node">(pygraphdb.kvstores.PyRexStore method)</a>
+</li>
+        </ul></li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.get_node_keys_generator">get_node_keys_generator() (pygraphdb.graphdb.GraphDB method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.kvstores.LevelDBStore.get_node_keys_generator">(pygraphdb.kvstores.LevelDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.LMDBStore.get_node_keys_generator">(pygraphdb.kvstores.LMDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.PyRexStore.get_node_keys_generator">(pygraphdb.kvstores.PyRexStore method)</a>
+</li>
+        </ul></li>
+        <li><a href="api.html#pygraphdb.kvstores.LevelDBStore.get_node_keys_iterator">get_node_keys_iterator() (pygraphdb.kvstores.LevelDBStore method)</a>
+</li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.get_nodes">get_nodes() (pygraphdb.graphdb.GraphDB method)</a>
+</li>
+        <li><a href="api.html#pygraphdb.kvstores.KVStore.get_nodes_bulk">get_nodes_bulk() (pygraphdb.kvstores.KVStore method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.kvstores.LevelDBStore.get_nodes_bulk">(pygraphdb.kvstores.LevelDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.LMDBStore.get_nodes_bulk">(pygraphdb.kvstores.LMDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.PyRexStore.get_nodes_bulk">(pygraphdb.kvstores.PyRexStore method)</a>
+</li>
+        </ul></li>
+        <li><a href="api.html#pygraphdb.kvstores.SimpleIndexCounterKVStore.get_num_keys">get_num_keys() (pygraphdb.kvstores.SimpleIndexCounterKVStore method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.kvstores.SimpleKV.get_num_keys">(pygraphdb.kvstores.SimpleKV method)</a>
+</li>
+        </ul></li>
+        <li><a href="api.html#pygraphdb.graphdb.Edge.get_type">get_type (pygraphdb.graphdb.Edge property)</a>
+</li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.get_typed_adjacency">get_typed_adjacency() (pygraphdb.graphdb.GraphDB method)</a>
+</li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB">GraphDB (class in pygraphdb.graphdb)</a>
+</li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphEntityDictSerializer">GraphEntityDictSerializer (class in pygraphdb.graphdb)</a>
+</li>
+    </ul></td>
+  </tr></table>
+</section>
+
+<section id="H" class="genindex-section">
+  <h2>H</h2>
+  <table style="width: 100%" class="indextable genindextable"><tr>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#pygraphdb.kvstores.PyRexStore.has_native_columnar_ingestion">has_native_columnar_ingestion() (pygraphdb.kvstores.PyRexStore method)</a>
+</li>
+    </ul></td>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#pygraphdb.cypher.MatchQuery.hops">hops (pygraphdb.cypher.MatchQuery attribute)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.sampling.SamplingPattern.hops">(pygraphdb.sampling.SamplingPattern attribute)</a>
+</li>
+        </ul></li>
+    </ul></td>
+  </tr></table>
+</section>
+
+<section id="I" class="genindex-section">
+  <h2>I</h2>
+  <table style="width: 100%" class="indextable genindextable"><tr>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.ingest_edges_arrow">ingest_edges_arrow() (pygraphdb.graphdb.GraphDB method)</a>
+</li>
+        <li><a href="api.html#pygraphdb.kvstores.KVStore.ingest_edges_columnar">ingest_edges_columnar() (pygraphdb.kvstores.KVStore method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.kvstores.PyRexStore.ingest_edges_columnar">(pygraphdb.kvstores.PyRexStore method)</a>
+</li>
+        </ul></li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.ingest_edges_polars">ingest_edges_polars() (pygraphdb.graphdb.GraphDB method)</a>
+</li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.ingest_nodes_arrow">ingest_nodes_arrow() (pygraphdb.graphdb.GraphDB method)</a>
+</li>
+        <li><a href="api.html#pygraphdb.kvstores.KVStore.ingest_nodes_columnar">ingest_nodes_columnar() (pygraphdb.kvstores.KVStore method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.kvstores.PyRexStore.ingest_nodes_columnar">(pygraphdb.kvstores.PyRexStore method)</a>
+</li>
+        </ul></li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.ingest_nodes_polars">ingest_nodes_polars() (pygraphdb.graphdb.GraphDB method)</a>
+</li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.iter_edge_ids_by_property">iter_edge_ids_by_property() (pygraphdb.graphdb.GraphDB method)</a>
+</li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.iter_edge_ids_by_type">iter_edge_ids_by_type() (pygraphdb.graphdb.GraphDB method)</a>
+</li>
+    </ul></td>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#pygraphdb.kvstores.KVStore.iter_index_prefix">iter_index_prefix() (pygraphdb.kvstores.KVStore method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.kvstores.LevelDBStore.iter_index_prefix">(pygraphdb.kvstores.LevelDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.LMDBStore.iter_index_prefix">(pygraphdb.kvstores.LMDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.PyRexStore.iter_index_prefix">(pygraphdb.kvstores.PyRexStore method)</a>
+</li>
+        </ul></li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.iter_node_ids_by_label">iter_node_ids_by_label() (pygraphdb.graphdb.GraphDB method)</a>
+</li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.iter_node_ids_by_property">iter_node_ids_by_property() (pygraphdb.graphdb.GraphDB method)</a>
+</li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.iter_typed_adjacency">iter_typed_adjacency() (pygraphdb.graphdb.GraphDB method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.kvstores.KVStore.iter_typed_adjacency">(pygraphdb.kvstores.KVStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.LevelDBStore.iter_typed_adjacency">(pygraphdb.kvstores.LevelDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.LMDBStore.iter_typed_adjacency">(pygraphdb.kvstores.LMDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.PyRexStore.iter_typed_adjacency">(pygraphdb.kvstores.PyRexStore method)</a>
+</li>
+        </ul></li>
+    </ul></td>
+  </tr></table>
+</section>
+
+<section id="J" class="genindex-section">
+  <h2>J</h2>
+  <table style="width: 100%" class="indextable genindextable"><tr>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#pygraphdb.serializers.JSONSerializer">JSONSerializer (class in pygraphdb.serializers)</a>
+</li>
+    </ul></td>
+  </tr></table>
+</section>
+
+<section id="K" class="genindex-section">
+  <h2>K</h2>
+  <table style="width: 100%" class="indextable genindextable"><tr>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.key_to_string">key_to_string() (pygraphdb.graphdb.GraphDB method)</a>
+</li>
+    </ul></td>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#pygraphdb.kvstores.KVStore">KVStore (class in pygraphdb.kvstores)</a>
+</li>
+    </ul></td>
+  </tr></table>
+</section>
+
+<section id="L" class="genindex-section">
+  <h2>L</h2>
+  <table style="width: 100%" class="indextable genindextable"><tr>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#pygraphdb.cypher.NodeScanQuery.label">label (pygraphdb.cypher.NodeScanQuery attribute)</a>
+</li>
+    </ul></td>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#pygraphdb.kvstores.LevelDBStore">LevelDBStore (class in pygraphdb.kvstores)</a>
+</li>
+        <li><a href="api.html#pygraphdb.kvstores.LMDBStore">LMDBStore (class in pygraphdb.kvstores)</a>
+</li>
+    </ul></td>
+  </tr></table>
+</section>
+
+<section id="M" class="genindex-section">
+  <h2>M</h2>
+  <table style="width: 100%" class="indextable genindextable"><tr>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#pygraphdb.cypher.MatchQuery">MatchQuery (class in pygraphdb.cypher)</a>
+</li>
+        <li><a href="api.html#pygraphdb.serializers.MessagePackSerializer">MessagePackSerializer (class in pygraphdb.serializers)</a>
+</li>
+        <li>
+    module
+
+        <ul>
+          <li><a href="api.html#module-pygraphdb.cypher">pygraphdb.cypher</a>
+</li>
+          <li><a href="api.html#module-pygraphdb.graphdb">pygraphdb.graphdb</a>
+</li>
+          <li><a href="api.html#module-pygraphdb.ingestion">pygraphdb.ingestion</a>
+</li>
+          <li><a href="api.html#module-pygraphdb.kvstores">pygraphdb.kvstores</a>
+</li>
+          <li><a href="api.html#module-pygraphdb.sampling">pygraphdb.sampling</a>
+</li>
+          <li><a href="api.html#module-pygraphdb.serializers">pygraphdb.serializers</a>
+</li>
+        </ul></li>
+    </ul></td>
+  </tr></table>
+</section>
+
+<section id="N" class="genindex-section">
+  <h2>N</h2>
+  <table style="width: 100%" class="indextable genindextable"><tr>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.neighbors_by_edge_type">neighbors_by_edge_type() (pygraphdb.graphdb.GraphDB method)</a>
+</li>
+        <li><a href="api.html#pygraphdb.graphdb.Node">Node (class in pygraphdb.graphdb)</a>
+</li>
+        <li><a href="api.html#pygraphdb.ingestion.NodeList.node_ids">node_ids (pygraphdb.ingestion.NodeList attribute)</a>
+</li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.node_key_to_bytes">node_key_to_bytes() (pygraphdb.graphdb.GraphDB method)</a>
+</li>
+    </ul></td>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#pygraphdb.ingestion.NodeList.node_values">node_values (pygraphdb.ingestion.NodeList attribute)</a>
+</li>
+        <li><a href="api.html#pygraphdb.ingestion.NodeList">NodeList (class in pygraphdb.ingestion)</a>
+</li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.nodes_by_label">nodes_by_label() (pygraphdb.graphdb.GraphDB method)</a>
+</li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.nodes_by_property">nodes_by_property() (pygraphdb.graphdb.GraphDB method)</a>
+</li>
+        <li><a href="api.html#pygraphdb.cypher.NodeScanQuery">NodeScanQuery (class in pygraphdb.cypher)</a>
+</li>
+    </ul></td>
+  </tr></table>
+</section>
+
+<section id="P" class="genindex-section">
+  <h2>P</h2>
+  <table style="width: 100%" class="indextable genindextable"><tr>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#pygraphdb.cypher.parse">parse() (in module pygraphdb.cypher)</a>
+</li>
+        <li><a href="api.html#pygraphdb.cypher.SampleTypedPathsCall.pattern">pattern (pygraphdb.cypher.SampleTypedPathsCall attribute)</a>
+</li>
+        <li><a href="api.html#pygraphdb.serializers.PickleSerializer">PickleSerializer (class in pygraphdb.serializers)</a>
+</li>
+        <li><a href="api.html#pygraphdb.cypher.NodeScanQuery.property_name">property_name (pygraphdb.cypher.NodeScanQuery attribute)</a>
+</li>
+        <li><a href="api.html#pygraphdb.cypher.NodeScanQuery.property_value">property_value (pygraphdb.cypher.NodeScanQuery attribute)</a>
+</li>
+        <li><a href="api.html#pygraphdb.serializers.ProtobufSerializer">ProtobufSerializer (class in pygraphdb.serializers)</a>
+</li>
+        <li><a href="api.html#pygraphdb.kvstores.KVStore.put">put() (pygraphdb.kvstores.KVStore method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.kvstores.LMDBStore.put">(pygraphdb.kvstores.LMDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.PyRexStore.put">(pygraphdb.kvstores.PyRexStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.SimpleIndexCounterKVStore.put">(pygraphdb.kvstores.SimpleIndexCounterKVStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.SimpleKV.put">(pygraphdb.kvstores.SimpleKV method)</a>
+</li>
+        </ul></li>
+        <li><a href="api.html#pygraphdb.kvstores.LevelDBStore.put_adjacency">put_adjacency() (pygraphdb.kvstores.LevelDBStore method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.kvstores.LMDBStore.put_adjacency">(pygraphdb.kvstores.LMDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.PyRexStore.put_adjacency">(pygraphdb.kvstores.PyRexStore method)</a>
+</li>
+        </ul></li>
+        <li><a href="api.html#pygraphdb.kvstores.LevelDBStore.put_adjacency_bulk">put_adjacency_bulk() (pygraphdb.kvstores.LevelDBStore method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.kvstores.LMDBStore.put_adjacency_bulk">(pygraphdb.kvstores.LMDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.PyRexStore.put_adjacency_bulk">(pygraphdb.kvstores.PyRexStore method)</a>
+</li>
+        </ul></li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.put_adjacency_list">put_adjacency_list() (pygraphdb.graphdb.GraphDB method)</a>
+</li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.put_edge">put_edge() (pygraphdb.graphdb.GraphDB method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.kvstores.KVStore.put_edge">(pygraphdb.kvstores.KVStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.LevelDBStore.put_edge">(pygraphdb.kvstores.LevelDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.LMDBStore.put_edge">(pygraphdb.kvstores.LMDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.PyRexStore.put_edge">(pygraphdb.kvstores.PyRexStore method)</a>
+</li>
+        </ul></li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.put_edges_bulk">put_edges_bulk() (pygraphdb.graphdb.GraphDB method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.kvstores.KVStore.put_edges_bulk">(pygraphdb.kvstores.KVStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.LevelDBStore.put_edges_bulk">(pygraphdb.kvstores.LevelDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.LMDBStore.put_edges_bulk">(pygraphdb.kvstores.LMDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.PyRexStore.put_edges_bulk">(pygraphdb.kvstores.PyRexStore method)</a>
+</li>
+        </ul></li>
+        <li><a href="api.html#pygraphdb.kvstores.KVStore.put_index_entries_bulk">put_index_entries_bulk() (pygraphdb.kvstores.KVStore method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.kvstores.LevelDBStore.put_index_entries_bulk">(pygraphdb.kvstores.LevelDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.LMDBStore.put_index_entries_bulk">(pygraphdb.kvstores.LMDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.PyRexStore.put_index_entries_bulk">(pygraphdb.kvstores.PyRexStore method)</a>
+</li>
+        </ul></li>
+        <li><a href="api.html#pygraphdb.kvstores.KVStore.put_index_entry">put_index_entry() (pygraphdb.kvstores.KVStore method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.kvstores.LevelDBStore.put_index_entry">(pygraphdb.kvstores.LevelDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.LMDBStore.put_index_entry">(pygraphdb.kvstores.LMDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.PyRexStore.put_index_entry">(pygraphdb.kvstores.PyRexStore method)</a>
+</li>
+        </ul></li>
+    </ul></td>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.put_node">put_node() (pygraphdb.graphdb.GraphDB method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.kvstores.KVStore.put_node">(pygraphdb.kvstores.KVStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.LevelDBStore.put_node">(pygraphdb.kvstores.LevelDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.LMDBStore.put_node">(pygraphdb.kvstores.LMDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.PyRexStore.put_node">(pygraphdb.kvstores.PyRexStore method)</a>
+</li>
+        </ul></li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.put_nodes">put_nodes() (pygraphdb.graphdb.GraphDB method)</a>
+</li>
+        <li><a href="api.html#pygraphdb.kvstores.KVStore.put_nodes_bulk">put_nodes_bulk() (pygraphdb.kvstores.KVStore method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.kvstores.LevelDBStore.put_nodes_bulk">(pygraphdb.kvstores.LevelDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.LMDBStore.put_nodes_bulk">(pygraphdb.kvstores.LMDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.PyRexStore.put_nodes_bulk">(pygraphdb.kvstores.PyRexStore method)</a>
+</li>
+        </ul></li>
+        <li><a href="api.html#pygraphdb.kvstores.SimpleIndexCounterKVStore.put_num_keys">put_num_keys() (pygraphdb.kvstores.SimpleIndexCounterKVStore method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.kvstores.SimpleKV.put_num_keys">(pygraphdb.kvstores.SimpleKV method)</a>
+</li>
+        </ul></li>
+        <li><a href="api.html#pygraphdb.kvstores.KVStore.put_typed_adjacency">put_typed_adjacency() (pygraphdb.kvstores.KVStore method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.kvstores.LevelDBStore.put_typed_adjacency">(pygraphdb.kvstores.LevelDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.LMDBStore.put_typed_adjacency">(pygraphdb.kvstores.LMDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.PyRexStore.put_typed_adjacency">(pygraphdb.kvstores.PyRexStore method)</a>
+</li>
+        </ul></li>
+        <li><a href="api.html#pygraphdb.kvstores.KVStore.put_typed_adjacency_bulk">put_typed_adjacency_bulk() (pygraphdb.kvstores.KVStore method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.kvstores.LevelDBStore.put_typed_adjacency_bulk">(pygraphdb.kvstores.LevelDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.LMDBStore.put_typed_adjacency_bulk">(pygraphdb.kvstores.LMDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.PyRexStore.put_typed_adjacency_bulk">(pygraphdb.kvstores.PyRexStore method)</a>
+</li>
+        </ul></li>
+        <li>
+    pygraphdb.cypher
+
+        <ul>
+          <li><a href="api.html#module-pygraphdb.cypher">module</a>
+</li>
+        </ul></li>
+        <li>
+    pygraphdb.graphdb
+
+        <ul>
+          <li><a href="api.html#module-pygraphdb.graphdb">module</a>
+</li>
+        </ul></li>
+        <li>
+    pygraphdb.ingestion
+
+        <ul>
+          <li><a href="api.html#module-pygraphdb.ingestion">module</a>
+</li>
+        </ul></li>
+        <li>
+    pygraphdb.kvstores
+
+        <ul>
+          <li><a href="api.html#module-pygraphdb.kvstores">module</a>
+</li>
+        </ul></li>
+        <li>
+    pygraphdb.sampling
+
+        <ul>
+          <li><a href="api.html#module-pygraphdb.sampling">module</a>
+</li>
+        </ul></li>
+        <li>
+    pygraphdb.serializers
+
+        <ul>
+          <li><a href="api.html#module-pygraphdb.serializers">module</a>
+</li>
+        </ul></li>
+        <li><a href="api.html#pygraphdb.kvstores.PyRexStore">PyRexStore (class in pygraphdb.kvstores)</a>
+</li>
+    </ul></td>
+  </tr></table>
+</section>
+
+<section id="Q" class="genindex-section">
+  <h2>Q</h2>
+  <table style="width: 100%" class="indextable genindextable"><tr>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.query">query() (pygraphdb.graphdb.GraphDB method)</a>
+</li>
+    </ul></td>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#pygraphdb.cypher.QueryResult">QueryResult (class in pygraphdb.cypher)</a>
+</li>
+    </ul></td>
+  </tr></table>
+</section>
+
+<section id="R" class="genindex-section">
+  <h2>R</h2>
+  <table style="width: 100%" class="indextable genindextable"><tr>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#pygraphdb.kvstores.KVStore.range_iter">range_iter() (pygraphdb.kvstores.KVStore method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.kvstores.LevelDBStore.range_iter">(pygraphdb.kvstores.LevelDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.LMDBStore.range_iter">(pygraphdb.kvstores.LMDBStore method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.kvstores.PyRexStore.range_iter">(pygraphdb.kvstores.PyRexStore method)</a>
+</li>
+        </ul></li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.range_query_nodes">range_query_nodes() (pygraphdb.graphdb.GraphDB method)</a>
+</li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.rebuild_edge_property_index">rebuild_edge_property_index() (pygraphdb.graphdb.GraphDB method)</a>
+</li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.rebuild_label_index">rebuild_label_index() (pygraphdb.graphdb.GraphDB method)</a>
+</li>
+    </ul></td>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.rebuild_node_property_index">rebuild_node_property_index() (pygraphdb.graphdb.GraphDB method)</a>
+</li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.rebuild_relationship_type_index">rebuild_relationship_type_index() (pygraphdb.graphdb.GraphDB method)</a>
+</li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.rebuild_typed_adjacency">rebuild_typed_adjacency() (pygraphdb.graphdb.GraphDB method)</a>
+</li>
+        <li><a href="api.html#pygraphdb.cypher.QueryResult.records">records (pygraphdb.cypher.QueryResult attribute)</a>
+</li>
+        <li><a href="api.html#pygraphdb.cypher.TraversalHop.rel_var">rel_var (pygraphdb.cypher.TraversalHop attribute)</a>
+</li>
+        <li><a href="api.html#pygraphdb.cypher.MatchQuery.returns">returns (pygraphdb.cypher.MatchQuery attribute)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.cypher.NodeScanQuery.returns">(pygraphdb.cypher.NodeScanQuery attribute)</a>
+</li>
+          <li><a href="api.html#pygraphdb.cypher.SampleTypedPathsCall.returns">(pygraphdb.cypher.SampleTypedPathsCall attribute)</a>
+</li>
+        </ul></li>
+    </ul></td>
+  </tr></table>
+</section>
+
+<section id="S" class="genindex-section">
+  <h2>S</h2>
+  <table style="width: 100%" class="indextable genindextable"><tr>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.sample_neighbors">sample_neighbors() (pygraphdb.graphdb.GraphDB method)</a>
+</li>
+        <li><a href="api.html#pygraphdb.sampling.SamplingHop.sample_size">sample_size (pygraphdb.sampling.SamplingHop attribute)</a>
+</li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.sample_typed_paths">sample_typed_paths() (pygraphdb.graphdb.GraphDB method)</a>
+</li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.sample_typed_subgraph">sample_typed_subgraph() (pygraphdb.graphdb.GraphDB method)</a>
+</li>
+        <li><a href="api.html#pygraphdb.cypher.SampleTypedPathsCall">SampleTypedPathsCall (class in pygraphdb.cypher)</a>
+</li>
+        <li><a href="api.html#pygraphdb.sampling.SamplingHop">SamplingHop (class in pygraphdb.sampling)</a>
+</li>
+        <li><a href="api.html#pygraphdb.sampling.SamplingPattern">SamplingPattern (class in pygraphdb.sampling)</a>
+</li>
+        <li><a href="api.html#pygraphdb.cypher.SampleTypedPathsCall.seed_ids">seed_ids (pygraphdb.cypher.SampleTypedPathsCall attribute)</a>
+</li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphEntityDictSerializer.serialize">serialize() (pygraphdb.graphdb.GraphEntityDictSerializer method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.serializers.JSONSerializer.serialize">(pygraphdb.serializers.JSONSerializer method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.serializers.MessagePackSerializer.serialize">(pygraphdb.serializers.MessagePackSerializer method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.serializers.PickleSerializer.serialize">(pygraphdb.serializers.PickleSerializer method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.serializers.ProtobufSerializer.serialize">(pygraphdb.serializers.ProtobufSerializer method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.serializers.Serializer.serialize">(pygraphdb.serializers.Serializer method)</a>
+</li>
+        </ul></li>
+    </ul></td>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.serialize_edge_value">serialize_edge_value() (pygraphdb.graphdb.GraphDB method)</a>
+</li>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.serialize_node_value">serialize_node_value() (pygraphdb.graphdb.GraphDB method)</a>
+</li>
+        <li><a href="api.html#pygraphdb.serializers.Serializer">Serializer (class in pygraphdb.serializers)</a>
+</li>
+        <li><a href="api.html#pygraphdb.kvstores.SimpleIndexCounterKVStore">SimpleIndexCounterKVStore (class in pygraphdb.kvstores)</a>
+</li>
+        <li><a href="api.html#pygraphdb.kvstores.SimpleKV">SimpleKV (class in pygraphdb.kvstores)</a>
+</li>
+        <li><a href="api.html#pygraphdb.cypher.MatchQuery.source_id">source_id (pygraphdb.cypher.MatchQuery attribute)</a>
+</li>
+        <li><a href="api.html#pygraphdb.cypher.MatchQuery.source_var">source_var (pygraphdb.cypher.MatchQuery attribute)</a>
+</li>
+        <li><a href="api.html#pygraphdb.ingestion.EdgeList.sources">sources (pygraphdb.ingestion.EdgeList attribute)</a>
+</li>
+    </ul></td>
+  </tr></table>
+</section>
+
+<section id="T" class="genindex-section">
+  <h2>T</h2>
+  <table style="width: 100%" class="indextable genindextable"><tr>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#pygraphdb.cypher.TraversalHop.target_var">target_var (pygraphdb.cypher.TraversalHop attribute)</a>
+</li>
+        <li><a href="api.html#pygraphdb.ingestion.EdgeList.targets">targets (pygraphdb.ingestion.EdgeList attribute)</a>
+</li>
+        <li><a href="api.html#pygraphdb.graphdb.TimeIndexedEdge">TimeIndexedEdge (class in pygraphdb.graphdb)</a>
+</li>
+        <li><a href="api.html#pygraphdb.graphdb.Edge.to_dict">to_dict() (pygraphdb.graphdb.Edge method)</a>
+
+        <ul>
+          <li><a href="api.html#pygraphdb.graphdb.Node.to_dict">(pygraphdb.graphdb.Node method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.graphdb.TimeIndexedEdge.to_dict">(pygraphdb.graphdb.TimeIndexedEdge method)</a>
+</li>
+          <li><a href="api.html#pygraphdb.sampling.SamplingHop.to_dict">(pygraphdb.sampling.SamplingHop method)</a>
+</li>
+        </ul></li>
+    </ul></td>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#pygraphdb.sampling.SamplingPattern.to_dicts">to_dicts() (pygraphdb.sampling.SamplingPattern method)</a>
+</li>
+        <li><a href="api.html#pygraphdb.cypher.TraversalHop">TraversalHop (class in pygraphdb.cypher)</a>
+</li>
+    </ul></td>
+  </tr></table>
+</section>
+
+<section id="U" class="genindex-section">
+  <h2>U</h2>
+  <table style="width: 100%" class="indextable genindextable"><tr>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.update_edge">update_edge() (pygraphdb.graphdb.GraphDB method)</a>
+</li>
+    </ul></td>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#pygraphdb.graphdb.GraphDB.update_node">update_node() (pygraphdb.graphdb.GraphDB method)</a>
+</li>
+    </ul></td>
+  </tr></table>
+</section>
+
+<section id="V" class="genindex-section">
+  <h2>V</h2>
+  <table style="width: 100%" class="indextable genindextable"><tr>
+    <td style="width: 33%; vertical-align: top;"><ul>
+        <li><a href="api.html#pygraphdb.cypher.NodeScanQuery.variable">variable (pygraphdb.cypher.NodeScanQuery attribute)</a>
+</li>
+    </ul></td>
+  </tr></table>
+</section>
+
+
+        </article>
+      </div>
+      <footer>
+        
+        <div class="related-pages">
+          
+          
+        </div>
+        <div class="bottom-of-page">
+          <div class="left-details">
+            <div class="copyright">
+                Copyright &#169; 2026, PyGraphDB contributors
+            </div>
+            Made with <a href="https://www.sphinx-doc.org/">Sphinx</a> and <a class="muted-link" href="https://pradyunsg.me">@pradyunsg</a>'s
+            
+            <a href="https://github.com/pradyunsg/furo">Furo</a>
+            
+          </div>
+          <div class="right-details">
+            
+          </div>
+        </div>
+        
+      </footer>
+    </div>
+    <aside class="toc-drawer no-toc">
+      
+      
+      
+    </aside>
+  </div>
+</div><script src="_static/documentation_options.js?v=01f34227"></script>
+    <script src="_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="_static/scripts/furo.js?v=46bd48cc"></script>
+    </body>
+</html>
