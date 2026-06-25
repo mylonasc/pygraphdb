@@ -2,7 +2,7 @@
 
 The supported subset maps directly to existing typed adjacency and sampling APIs:
 
-    MATCH (a {id: "node-id"})-[:TYPE1]->(b)<-[:TYPE2]-(c) RETURN a, b, c
+    MATCH (a {id: "node-id"})-[:TYPE1]->(b)<-[:TYPE2]-(c) RETURN a.name, b LIMIT 10
     CALL pg.sample_typed_paths(["node-id"], [{"edge_type": "TYPE", "sample_size": 2}]) YIELD path RETURN path
 """
 
@@ -15,6 +15,8 @@ import re
 
 _IDENTIFIER = r"[A-Za-z_][A-Za-z0-9_]*"
 _IDENTIFIER_RE = re.compile(rf"^{_IDENTIFIER}$")
+_RETURN_ITEM = rf"{_IDENTIFIER}(?:\.{_IDENTIFIER})?"
+_RETURN_ITEMS = rf"{_RETURN_ITEM}(?:\s*,\s*{_RETURN_ITEM})*"
 _ANCHOR_RE = re.compile(
     rf"^\s*\((?P<source_var>{_IDENTIFIER})\s*"
     rf"\{{\s*id\s*:\s*(?P<quote>['\"])(?P<source_id>.*?)(?P=quote)\s*\}}\)"
@@ -32,17 +34,17 @@ _ANY_HOP_RE = re.compile(
     rf"\((?P<target_var>{_IDENTIFIER})\)"
 )
 _RETURN_RE = re.compile(
-    rf"^\s*RETURN\s+(?P<returns>{_IDENTIFIER}(?:\s*,\s*{_IDENTIFIER})*)\s*;?\s*$",
+    rf"^\s*RETURN\s+(?P<returns>{_RETURN_ITEMS})(?:\s+LIMIT\s+(?P<limit>\d+))?\s*;?\s*$",
     re.IGNORECASE | re.DOTALL,
 )
 _NODE_SCAN_RE = re.compile(
     rf"^\s*MATCH\s+\((?P<var>{_IDENTIFIER}):(?P<label>{_IDENTIFIER})(?:\s*\{{\s*(?P<property>{_IDENTIFIER})\s*:\s*(?P<value>.*?)\s*\}})?\)\s+"
-    rf"RETURN\s+(?P<returns>{_IDENTIFIER}(?:\s*,\s*{_IDENTIFIER})*)\s*;?\s*$",
+    rf"RETURN\s+(?P<returns>{_RETURN_ITEMS})(?:\s+LIMIT\s+(?P<limit>\d+))?\s*;?\s*$",
     re.IGNORECASE | re.DOTALL,
 )
 _CALL_SAMPLE_RE = re.compile(
     r"^\s*CALL\s+pg\.sample_typed_paths\s*\((?P<args>.*)\)\s+"
-    r"YIELD\s+path\s+RETURN\s+path\s*;?\s*$",
+    r"YIELD\s+path\s+RETURN\s+path(?:\s+LIMIT\s+(?P<limit>\d+))?\s*;?\s*$",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -65,6 +67,7 @@ class MatchQuery:
     source_id: str
     hops: tuple[TraversalHop, ...]
     returns: tuple[str, ...]
+    limit: int | None = None
 
 
 @dataclass(frozen=True)
@@ -74,6 +77,7 @@ class SampleTypedPathsCall:
     seed_ids: list[str]
     pattern: list[dict[str, object]]
     returns: tuple[str, ...] = ("path",)
+    limit: int | None = None
 
 
 @dataclass(frozen=True)
@@ -85,6 +89,7 @@ class NodeScanQuery:
     property_name: str | None
     property_value: object
     returns: tuple[str, ...]
+    limit: int | None = None
 
 
 @dataclass(frozen=True)
@@ -155,6 +160,8 @@ def execute(graph, query: str) -> QueryResult:
     parsed = parse(query)
     if isinstance(parsed, SampleTypedPathsCall):
         paths = graph.sample_typed_paths(parsed.seed_ids, parsed.pattern)
+        if parsed.limit is not None:
+            paths = paths[:parsed.limit]
         return QueryResult(
             columns=parsed.returns,
             records=[{"path": path} for path in paths],
@@ -170,7 +177,7 @@ def _parse_node_scan(query: str) -> NodeScanQuery | None:
         return None
     returns = _parse_returns(match.group("returns"))
     variable = match.group("var")
-    unknown = [name for name in returns if name != variable]
+    unknown = [name for name in _return_variables(returns) if name != variable]
     if unknown:
         raise ValueError(f"RETURN references unbound variable(s): {', '.join(unknown)}")
     property_value = None
@@ -182,6 +189,7 @@ def _parse_node_scan(query: str) -> NodeScanQuery | None:
         property_name=match.group("property"),
         property_value=property_value,
         returns=returns,
+        limit=_parse_limit(match.group("limit")),
     )
 
 
@@ -223,6 +231,7 @@ def _parse_match(query: str) -> MatchQuery:
         source_id=source_id,
         hops=tuple(hops),
         returns=_parse_returns(return_match.group("returns")),
+        limit=_parse_limit(return_match.group("limit")),
     )
     _validate_match_returns(parsed)
     return parsed
@@ -237,7 +246,7 @@ def _parse_sample_typed_paths(query: str) -> SampleTypedPathsCall:
         raise ValueError("pg.sample_typed_paths seed IDs must be a list of strings")
     if not isinstance(pattern, list) or not all(isinstance(hop, dict) for hop in pattern):
         raise ValueError("pg.sample_typed_paths pattern must be a list of dictionaries")
-    return SampleTypedPathsCall(seed_ids=seed_ids, pattern=pattern)
+    return SampleTypedPathsCall(seed_ids=seed_ids, pattern=pattern, limit=_parse_limit(match.groupdict().get("limit")))
 
 
 def _execute_match(graph, parsed: MatchQuery) -> QueryResult:
@@ -277,10 +286,9 @@ def _execute_match(graph, parsed: MatchQuery) -> QueryResult:
         if not frontier:
             break
 
-    records = [
-        {column: partial["bindings"][column] for column in parsed.returns}
-        for partial in frontier
-    ]
+    records = [_project_record(partial["bindings"], parsed.returns) for partial in frontier]
+    if parsed.limit is not None:
+        records = records[:parsed.limit]
     return QueryResult(columns=parsed.returns, records=records)
 
 
@@ -293,18 +301,29 @@ def _execute_node_scan(graph, parsed: NodeScanQuery) -> QueryResult:
         node_ids = label_ids
 
     records = []
-    for node_id in node_ids:
+    for node_id in sorted(node_ids):
         node = graph.get_node(node_id)
         if node is None:
             continue
         if parsed.property_name is not None and node.properties.get(parsed.property_name) != parsed.property_value:
             continue
-        records.append({parsed.variable: node})
+        records.append(_project_record({parsed.variable: node}, parsed.returns))
+        if parsed.limit is not None and len(records) >= parsed.limit:
+            break
     return QueryResult(columns=parsed.returns, records=records)
 
 
 def _parse_returns(return_text: str) -> tuple[str, ...]:
     return tuple(part.strip() for part in return_text.split(","))
+
+
+def _parse_limit(limit_text: str | None) -> int | None:
+    if limit_text is None:
+        return None
+    limit = int(limit_text)
+    if limit < 0:
+        raise ValueError("LIMIT must be non-negative")
+    return limit
 
 
 def _match_hop(remainder: str):
@@ -325,9 +344,34 @@ def _validate_match_returns(parsed: MatchQuery) -> None:
         bound_variables.add(hop.target_var)
         if hop.rel_var is not None:
             bound_variables.add(hop.rel_var)
-    unknown = [name for name in parsed.returns if name not in bound_variables]
+    unknown = [name for name in _return_variables(parsed.returns) if name not in bound_variables]
     if unknown:
         raise ValueError(f"RETURN references unbound variable(s): {', '.join(unknown)}")
+
+
+def _return_variables(returns: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(item.split(".", 1)[0] for item in returns)
+
+
+def _project_record(bindings: dict[str, object], returns: tuple[str, ...]) -> dict[str, object]:
+    return {column: _project_value(bindings, column) for column in returns}
+
+
+def _project_value(bindings: dict[str, object], return_item: str):
+    variable, _, property_name = return_item.partition(".")
+    value = bindings[variable]
+    if not property_name:
+        return value
+    properties = getattr(value, "properties", {})
+    if property_name in properties:
+        return properties[property_name]
+    if property_name == "id" and hasattr(value, "get_id"):
+        return value.get_id
+    if property_name == "labels" and hasattr(value, "labels"):
+        return value.labels
+    if property_name in {"source", "target"} and hasattr(value, property_name):
+        return getattr(value, property_name)
+    return None
 
 
 def _parse_call_arguments(args_text: str):

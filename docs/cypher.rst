@@ -28,8 +28,8 @@ Legend: ✅ supported, 🟡 partially supported, ❌ not supported.
      - Notes
    * - Node and edge property storage
      - ✅
-     - 🟡
-     - Cypher can return bound ``Node`` and ``Edge`` objects, but property projections such as ``RETURN n.name`` are not implemented yet.
+     - ✅
+     - Cypher can return bound ``Node`` and ``Edge`` objects and project properties such as ``RETURN n.name`` or ``RETURN r.score``.
    * - Native node labels
      - ✅
      - ✅
@@ -86,6 +86,10 @@ Legend: ✅ supported, 🟡 partially supported, ❌ not supported.
      - 🟡
      - ❌
      - DB API has exact-match index lookup helpers, but Cypher ``WHERE`` parsing is future work.
+   * - Result limiting
+     - ✅
+     - ✅
+     - Cypher supports ``LIMIT`` on label scans, anchored typed traversals, and ``pg.sample_typed_paths`` calls.
    * - Mutating Cypher queries
      - ✅
      - ❌
@@ -123,6 +127,21 @@ it for performance-sensitive lookup.
 If a property index is not registered, Cypher still restricts the search to the
 label index and then filters decoded nodes in Python.
 
+Property Projections and Limits
+-------------------------------
+
+Use dot notation in ``RETURN`` to project values from bound nodes and
+relationships. Missing properties return ``None``. The special fields ``id`` and
+``labels`` are available on nodes; ``id``, ``source``, and ``target`` are
+available on relationships.
+
+.. code-block:: python
+
+   result = graph_db.query('MATCH (d:Drug) RETURN d.id, d.name LIMIT 10')
+
+   for record in result:
+      print(record["d.id"], record["d.name"])
+
 Anchored One-Hop Traversal
 --------------------------
 
@@ -157,7 +176,15 @@ Relationship variables can be bound and returned.
    )
 
    for record in result:
-       print(record["r"].get_id, record["r"].properties)
+      print(record["r"].get_id, record["r"].properties)
+
+Relationship properties can be projected directly.
+
+.. code-block:: python
+
+   result = graph_db.query(
+      'MATCH (d {id: "drug-1"})-[r:drug-to-disease]->(x) RETURN r.id, r.type LIMIT 1'
+   )
 
 Anchored Multi-Hop Traversal
 ----------------------------
@@ -232,5 +259,4 @@ supported subset. The current Cypher API does not yet support:
 - Multiple labels in one node pattern, such as ``(n:Drug:Approved)``.
 - Unanchored all-node scans such as ``MATCH (n) RETURN n``.
 - ``WHERE`` predicates.
-- Property projections such as ``RETURN n.name``.
-- ``LIMIT``, ``ORDER BY``, aggregation, joins across separate patterns, or mutation clauses.
+- ``ORDER BY``, aggregation, joins across separate patterns, or mutation clauses.

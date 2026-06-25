@@ -47,6 +47,34 @@ def test_cypher_label_scan_rejects_unbound_return_variable(graph_db):
         graph_db.query("MATCH (n:Drug) RETURN m")
 
 
+def test_cypher_label_scan_can_project_properties(graph_db):
+    graph_db.put_nodes([
+        Node(node_id="drug-1", labels=["Drug"], properties={"name": "Aspirin"}),
+        Node(node_id="drug-2", labels=["Drug"], properties={"name": "Ibuprofen"}),
+    ])
+
+    result = graph_db.query("MATCH (n:Drug) RETURN n.id, n.name")
+
+    assert result.columns == ("n.id", "n.name")
+    assert result.records == [
+        {"n.id": "drug-1", "n.name": "Aspirin"},
+        {"n.id": "drug-2", "n.name": "Ibuprofen"},
+    ]
+
+
+def test_cypher_label_scan_limit_restricts_results(graph_db):
+    graph_db.put_nodes([
+        Node(node_id="drug-1", labels=["Drug"]),
+        Node(node_id="drug-2", labels=["Drug"]),
+        Node(node_id="drug-3", labels=["Drug"]),
+    ])
+
+    result = graph_db.query("MATCH (n:Drug) RETURN n.id LIMIT 2")
+
+    assert result.columns == ("n.id",)
+    assert result.records == [{"n.id": "drug-1"}, {"n.id": "drug-2"}]
+
+
 def test_cypher_one_hop_typed_match_returns_bound_nodes(graph_db):
     populate_typed_graph(graph_db)
 
@@ -82,6 +110,27 @@ def test_cypher_one_hop_typed_match_can_bind_relationship(graph_db):
     assert len(result) == 1
     assert result.records[0]["r"].get_id == "d1-disease"
     assert result.records[0]["x"].get_id == "disease-1"
+
+
+def test_cypher_typed_match_can_project_node_and_relationship_properties(graph_db):
+    populate_typed_graph(graph_db)
+
+    result = graph_db.query('MATCH (d {id: "drug-1"})-[r:drug-to-protein]->(p) RETURN d.id, r.type, p.kind')
+
+    assert result.columns == ("d.id", "r.type", "p.kind")
+    assert result.records == [
+        {"d.id": "drug-1", "r.type": "drug-to-protein", "p.kind": "protein"},
+        {"d.id": "drug-1", "r.type": "drug-to-protein", "p.kind": "protein"},
+    ]
+
+
+def test_cypher_typed_match_limit_restricts_results(graph_db):
+    populate_typed_graph(graph_db)
+
+    result = graph_db.query('MATCH (d {id: "drug-1"})-[:drug-to-protein]->(p) RETURN p.id LIMIT 1')
+
+    assert result.columns == ("p.id",)
+    assert result.records == [{"p.id": "protein-1"}]
 
 
 def test_cypher_multi_hop_typed_match_returns_bound_nodes(graph_db):
@@ -172,6 +221,19 @@ def test_cypher_sample_typed_paths_call_returns_paths(graph_db):
         assert len(sampled_path["path"]) == 2
         assert sampled_path["path"][0]["edge_type"] == "drug-to-protein"
         assert sampled_path["path"][1]["edge_type"] == "protein-to-disease"
+
+
+def test_cypher_sample_typed_paths_call_supports_limit(graph_db):
+    populate_typed_graph(graph_db)
+
+    result = graph_db.query(
+        'CALL pg.sample_typed_paths(["drug-1"], '
+        '[{"edge_type": "drug-to-protein", "direction": "out", "sample_size": 2}]) '
+        'YIELD path RETURN path LIMIT 1'
+    )
+
+    assert result.columns == ("path",)
+    assert len(result) == 1
 
 
 def test_cypher_sample_typed_paths_validates_arguments(graph_db):
