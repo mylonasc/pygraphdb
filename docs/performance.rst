@@ -119,6 +119,83 @@ index maintenance can be dominated by Python-side overhead. In those cases,
 RocksDB's compaction parallelism is not necessarily the bottleneck, so LevelDB
 can appear competitive or faster.
 
+ArcadeDB Comparison Benchmark
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Use ``scripts/benchmark_arcadedb_vs_pygraphdb.py`` to compare the
+RocksDB-backed pygraphdb path with ArcadeDB's native property graph engine. The
+ArcadeDB side uses the ``arcadedb-embedded`` Python package, which runs ArcadeDB
+in-process through JPype/JVM bindings and does not require a separate server.
+The suite is intentionally mixed: some workloads favor RocksDB/PyRex write
+paths, while others favor ArcadeDB's index-free adjacency traversal.
+
+Run a pygraphdb-only smoke test:
+
+.. code-block:: sh
+
+   uv run python scripts/benchmark_arcadedb_vs_pygraphdb.py \
+      --engines pygraphdb \
+      --nodes 10000 \
+      --edges 50000 \
+      --iterations 25 \
+      --output-dir benchmark_results/arcadedb_vs_pygraphdb_YYYYMMDD
+
+To include embedded ArcadeDB without adding it to the project dependencies, use
+``uv --with``:
+
+.. code-block:: sh
+
+   uv run --with arcadedb-embedded python scripts/benchmark_arcadedb_vs_pygraphdb.py \
+      --engines pygraphdb arcadedb \
+      --workloads columnar_ingest star_traversal bfs_depth typed_path rocksdb_compaction \
+      --nodes 100000 \
+      --edges 500000 \
+      --batch-size 100000 \
+      --iterations 100 \
+      --repetitions 10 \
+      --arcadedb-heap-size 4g \
+      --arcadedb-parallel 4 \
+      --output-dir benchmark_results/arcadedb_vs_pygraphdb_YYYYMMDD
+
+The script writes ``arcadedb_vs_pygraphdb_results.csv`` and
+``arcadedb_vs_pygraphdb_results.jsonl`` with raw per-repetition rows, plus
+``arcadedb_vs_pygraphdb_summary.csv`` and
+``arcadedb_vs_pygraphdb_summary.jsonl`` with mean and sample standard deviation
+by engine and workload. If ``arcadedb-embedded`` is not installed, ArcadeDB rows
+are emitted as ``status=skipped`` and pygraphdb rows still run.
+
+The workloads are:
+
+``columnar_ingest``
+   Compares pygraphdb's serialized Arrow ingestion and RocksDB native
+   ``write_columnar_batch`` fast path, when available, with ArcadeDB's embedded
+   ``GraphBatch`` importer. Both load attributed vertices and typed graph edges.
+
+``star_traversal``
+   Builds one high-degree hub and repeatedly expands outgoing ``RelA``
+   neighbors. This is a case where ArcadeDB's vertex-local edge segments and
+   index-free adjacency can be competitive or faster than prefix scans over a KV
+   store.
+
+``bfs_depth``
+   Runs bounded-depth traversal from ``n0``. pygraphdb uses typed adjacency
+   records; ArcadeDB uses SQL ``MATCH`` over outgoing ``RelA`` edges.
+
+``typed_path``
+   Repeatedly follows a typed ``RelA`` then ``RelB`` path. This exercises
+   property-graph typed edge expansion rather than raw key/value writes.
+
+``rocksdb_compaction``
+   Runs a permuted repeated-overwrite workload directly against the pygraphdb
+   RocksDB store. ArcadeDB rows are marked not applicable because this workload
+   targets raw LSM compaction behavior rather than a property-graph operation.
+
+Interpret results by workload instead of expecting one global winner. RocksDB is
+expected to show its strength on compaction-sensitive overwrites and append-only
+columnar ingestion. ArcadeDB is expected to be strongest when the query can start
+from an indexed vertex and then stay on native adjacency chains for hub, BFS, or
+typed-path expansion.
+
 Columnar Ingestion Benchmark
 ----------------------------
 

@@ -19,6 +19,7 @@ backend, serializing properties, traversing typed edges, and sampling subgraphs.
    typed-sampling
    cypher
    performance
+   arcadedb-benchmarks
    notebooks
 
 .. toctree::
