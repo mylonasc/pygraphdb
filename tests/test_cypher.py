@@ -111,6 +111,49 @@ def test_cypher_multi_hop_typed_match_can_bind_relationships(graph_db):
     }
 
 
+def test_cypher_reverse_typed_match_returns_bound_nodes(graph_db):
+    populate_typed_graph(graph_db)
+
+    result = graph_db.query('MATCH (p {id: "protein-1"})<-[:drug-to-protein]-(d) RETURN p, d')
+
+    assert result.columns == ("p", "d")
+    assert len(result) == 1
+    assert result.records[0]["p"].get_id == "protein-1"
+    assert result.records[0]["d"].get_id == "drug-1"
+
+
+def test_cypher_reverse_typed_match_can_bind_relationship(graph_db):
+    populate_typed_graph(graph_db)
+
+    result = graph_db.query('MATCH (p {id: "protein-1"})<-[r:drug-to-protein]-(d) RETURN r, d')
+
+    assert result.columns == ("r", "d")
+    assert len(result) == 1
+    assert result.records[0]["r"].get_id == "d1-p1"
+    assert result.records[0]["d"].get_id == "drug-1"
+
+
+def test_cypher_undirected_typed_match_returns_both_directions(graph_db):
+    populate_typed_graph(graph_db)
+
+    result = graph_db.query('MATCH (p {id: "protein-1"})-[:drug-to-protein]-(n) RETURN n')
+
+    assert [record["n"].get_id for record in result] == ["drug-1"]
+
+
+def test_cypher_mixed_direction_multi_hop_match(graph_db):
+    populate_typed_graph(graph_db)
+
+    result = graph_db.query(
+        'MATCH (x {id: "disease-1"})<-[:protein-to-disease]-(p)<-[:drug-to-protein]-(d) RETURN x, p, d'
+    )
+
+    assert result.columns == ("x", "p", "d")
+    assert [(record["x"].get_id, record["p"].get_id, record["d"].get_id) for record in result] == [
+        ("disease-1", "protein-1", "drug-1")
+    ]
+
+
 def test_cypher_sample_typed_paths_call_returns_paths(graph_db):
     populate_typed_graph(graph_db)
 

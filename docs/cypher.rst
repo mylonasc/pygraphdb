@@ -60,12 +60,12 @@ Legend: ✅ supported, 🟡 partially supported, ❌ not supported.
      - Cypher supports repeated outgoing typed hops from an anchored start node.
    * - Reverse typed traversal
      - ✅
-     - ❌
-     - DB API supports ``direction="in"``. Cypher support for ``<-[:TYPE]-`` is not implemented yet.
+     - ✅
+     - DB API supports ``direction="in"``. Cypher supports ``<-[:TYPE]-`` from an anchored node.
    * - Undirected typed traversal
      - ✅
-     - ❌
-     - DB API supports ``direction="any"``. Cypher support for ``-[:TYPE]-`` is not implemented yet.
+     - ✅
+     - DB API supports ``direction="any"``. Cypher supports ``-[:TYPE]-`` from an anchored node.
    * - Untyped BFS traversal
      - ✅
      - ❌
@@ -178,7 +178,31 @@ Relationship variables can be used across multiple hops as well.
 .. code-block:: python
 
    result = graph_db.query(
-       'MATCH (d {id: "drug-1"})-[r1:drug-to-protein]->(p)-[r2:protein-to-disease]->(x) RETURN r1, r2, x'
+      'MATCH (d {id: "drug-1"})-[r1:drug-to-protein]->(p)-[r2:protein-to-disease]->(x) RETURN r1, r2, x'
+   )
+
+Reverse and Undirected Traversal
+--------------------------------
+
+Anchored typed traversals can follow outgoing, incoming, or either-direction
+relationships.
+
+.. code-block:: python
+
+   incoming = graph_db.query(
+      'MATCH (p {id: "protein-1"})<-[:drug-to-protein]-(d) RETURN p, d'
+   )
+
+   undirected = graph_db.query(
+      'MATCH (p {id: "protein-1"})-[:drug-to-protein]-(n) RETURN n'
+   )
+
+Direction can vary by hop:
+
+.. code-block:: python
+
+   result = graph_db.query(
+      'MATCH (x {id: "disease-1"})<-[:protein-to-disease]-(p)<-[:drug-to-protein]-(d) RETURN x, p, d'
    )
 
 Sampling Procedure
@@ -206,7 +230,6 @@ Unsupported Cypher features raise ``ValueError`` with a message describing the
 supported subset. The current Cypher API does not yet support:
 
 - Multiple labels in one node pattern, such as ``(n:Drug:Approved)``.
-- Reverse or undirected patterns such as ``<-[:TYPE]-`` or ``-[:TYPE]-``.
 - Unanchored all-node scans such as ``MATCH (n) RETURN n``.
 - ``WHERE`` predicates.
 - Property projections such as ``RETURN n.name``.

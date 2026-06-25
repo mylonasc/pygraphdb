@@ -2,7 +2,7 @@
 
 The supported subset maps directly to existing typed adjacency and sampling APIs:
 
-    MATCH (a {id: "node-id"})-[:TYPE1]->(b)-[:TYPE2]->(c) RETURN a, b, c
+    MATCH (a {id: "node-id"})-[:TYPE1]->(b)<-[:TYPE2]-(c) RETURN a, b, c
     CALL pg.sample_typed_paths(["node-id"], [{"edge_type": "TYPE", "sample_size": 2}]) YIELD path RETURN path
 """
 
@@ -19,8 +19,16 @@ _ANCHOR_RE = re.compile(
     rf"^\s*\((?P<source_var>{_IDENTIFIER})\s*"
     rf"\{{\s*id\s*:\s*(?P<quote>['\"])(?P<source_id>.*?)(?P=quote)\s*\}}\)"
 )
-_HOP_RE = re.compile(
+_OUT_HOP_RE = re.compile(
     rf"^\s*-\s*\[(?:(?P<rel_var>{_IDENTIFIER})\s*)?:(?P<edge_type>[^\]\s]+)\]\s*->\s*"
+    rf"\((?P<target_var>{_IDENTIFIER})\)"
+)
+_IN_HOP_RE = re.compile(
+    rf"^\s*<-\s*\[(?:(?P<rel_var>{_IDENTIFIER})\s*)?:(?P<edge_type>[^\]\s]+)\]\s*-\s*"
+    rf"\((?P<target_var>{_IDENTIFIER})\)"
+)
+_ANY_HOP_RE = re.compile(
+    rf"^\s*-\s*\[(?:(?P<rel_var>{_IDENTIFIER})\s*)?:(?P<edge_type>[^\]\s]+)\]\s*-\s*"
     rf"\((?P<target_var>{_IDENTIFIER})\)"
 )
 _RETURN_RE = re.compile(
@@ -41,16 +49,17 @@ _CALL_SAMPLE_RE = re.compile(
 
 @dataclass(frozen=True)
 class TraversalHop:
-    """One outgoing typed relationship expansion in a parsed ``MATCH`` pattern."""
+    """One typed relationship expansion in a parsed ``MATCH`` pattern."""
 
     rel_var: str | None
     edge_type: str
     target_var: str
+    direction: str = "out"
 
 
 @dataclass(frozen=True)
 class MatchQuery:
-    """Parsed anchored, outgoing, typed path query."""
+    """Parsed anchored typed path query."""
 
     source_var: str
     source_id: str
@@ -190,14 +199,15 @@ def _parse_match(query: str) -> MatchQuery:
     remainder = remainder[anchor_match.end():]
     hops = []
     while True:
-        hop_match = _HOP_RE.match(remainder)
-        if hop_match is None:
+        hop_match, direction = _match_hop(remainder)
+        if hop_match is None or direction is None:
             break
         hops.append(
             TraversalHop(
                 rel_var=hop_match.group("rel_var"),
                 edge_type=hop_match.group("edge_type"),
                 target_var=hop_match.group("target_var"),
+                direction=direction,
             )
         )
         remainder = remainder[hop_match.end():]
@@ -248,7 +258,7 @@ def _execute_match(graph, parsed: MatchQuery) -> QueryResult:
             for adjacency in graph.iter_typed_adjacency(
                 partial["current_node_id"],
                 hop.edge_type,
-                direction="out",
+                direction=hop.direction,
             ):
                 target_node = graph.get_node(adjacency["neighbor_id"])
                 if target_node is None:
@@ -295,6 +305,18 @@ def _execute_node_scan(graph, parsed: NodeScanQuery) -> QueryResult:
 
 def _parse_returns(return_text: str) -> tuple[str, ...]:
     return tuple(part.strip() for part in return_text.split(","))
+
+
+def _match_hop(remainder: str):
+    for pattern, direction in (
+        (_IN_HOP_RE, "in"),
+        (_OUT_HOP_RE, "out"),
+        (_ANY_HOP_RE, "any"),
+    ):
+        match = pattern.match(remainder)
+        if match is not None:
+            return match, direction
+    return None, None
 
 
 def _validate_match_returns(parsed: MatchQuery) -> None:
@@ -349,7 +371,7 @@ def _split_top_level_args(args_text: str) -> list[str]:
 def _unsupported_query_error() -> ValueError:
     return ValueError(
         "Unsupported Cypher query. Supported subset: "
-        'MATCH (a {id: "node-id"})-[:TYPE1]->(b)-[:TYPE2]->(c) RETURN a, b, c; '
+        'MATCH (a {id: "node-id"})-[:TYPE1]->(b)<-[:TYPE2]-(c) RETURN a, b, c; '
         'MATCH (n:Label) RETURN n; '
         'CALL pg.sample_typed_paths(["node-id"], [{"edge_type": "TYPE", "sample_size": 2}]) YIELD path RETURN path'
     )
