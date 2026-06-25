@@ -30,6 +30,95 @@ Run a small RocksDB tuning matrix against the LevelDB baseline:
 
    python scripts/tune_rocksdb.py --nodes 20000 --edges 100000 --batch-size 10000
 
+Benchmarks
+----------
+
+Graph Ingestion, BFS, and Sampling Matrix
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Use ``scripts/benchmark_matrix.py`` to compare LevelDB and RocksDB across graph
+sizes, core counts, and ingestion paths:
+
+.. code-block:: sh
+
+   uv run python scripts/benchmark_matrix.py \
+      --sizes 10000 100000 1000000 \
+      --cores 1 2 4 \
+      --backends leveldb rocksdb \
+      --ingestion-modes object arrow polars \
+      --rocksdb-configs parallel-buffer64mb-bloom10 \
+      --chunk-size 100000 \
+      --samples 1000 \
+      --sample-size 5 \
+      --bfs-limit 100000 \
+      --output-dir benchmark_results/matrix_YYYYMMDD
+
+The matrix writes ``matrix_results.csv`` and ``matrix_results.jsonl``. It closes
+and reopens the database before traversal workloads so BFS and sampling do not
+measure only Python-side object state. BFS uses typed adjacency records so the
+same traversal can run after object, Arrow, and Polars ingestion.
+
+The ingestion modes do not have identical semantics:
+
+``object``
+   Uses ``put_nodes`` and ``put_edges_bulk``. It writes edge records, typed
+   adjacency, relationship indexes, and legacy adjacency blobs.
+
+``arrow`` and ``polars``
+   Use append-only columnar ingestion. They write edge records, typed adjacency,
+   and relationship indexes, but intentionally skip legacy adjacency blob
+   rewrites. LevelDB uses the generic append-only fallback; only RocksDB can use
+   PyRex's native ``write_columnar_batch`` fast path when available.
+
+Compaction-Pressure Benchmark
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Use ``scripts/benchmark_rocksdb_compaction.py`` for a workload designed to show
+where RocksDB's background compaction parallelism helps. The benchmark repeatedly
+overwrites the same key set using a permuted key order. This creates overlapping
+SST ranges and sustained LSM compaction pressure.
+
+.. code-block:: sh
+
+   uv run python scripts/benchmark_rocksdb_compaction.py \
+      --configs leveldb rocksdb-p1-bg1-smallbuf rocksdb-p4-bg4-smallbuf rocksdb-p8-bg8-smallbuf rocksdb-p4-bg4-largebuf \
+      --keys 250000 \
+      --passes 6 \
+      --batch-size 5000 \
+      --value-size 1024 \
+      --write-buffer-size 2097152 \
+      --output-dir benchmark_results/compaction_pressure_YYYYMMDD
+
+The script writes ``compaction_pressure_results.csv`` and
+``compaction_pressure_results.jsonl``. PyRex does not currently expose RocksDB
+properties such as compaction-pending, level sizes, or statistics, so the script
+records SST/log file counts and sizes as indirect evidence of flush and
+compaction behavior.
+
+A local run on 2026-06-25 produced:
+
+================================= =========== ===================== =================== =============
+Configuration                     Backend     Initial write rate    Overwrite avg rate  Final SSTs
+================================= =========== ===================== =================== =============
+LevelDB                           LevelDB     329,433 writes/s      114,663 writes/s    30
+RocksDB p1/bg1 small buffer       RocksDB     694,105 writes/s      262,405 writes/s    14
+RocksDB p4/bg4 small buffer       RocksDB     1,008,871 writes/s    749,948 writes/s    47
+RocksDB p8/bg8 small buffer       RocksDB     987,248 writes/s      772,436 writes/s    17
+RocksDB p4/bg4 large buffer       RocksDB     1,088,475 writes/s    1,132,815 writes/s  7
+================================= =========== ===================== =================== =============
+
+This is the benchmark case where the RocksDB-backed database performs clearly
+better. The workload creates many overlapping sorted runs; RocksDB can flush and
+compact them with multiple background jobs, while LevelDB has a much narrower
+background-compaction model. Larger write buffers also help RocksDB by reducing
+flush frequency and creating fewer, larger compaction inputs.
+
+This result should not be generalized to every graph workload. Append-only graph
+ingestion with Python object construction, serialization, key construction, and
+index maintenance can be dominated by Python-side overhead. In those cases,
+RocksDB's compaction parallelism is not necessarily the bottleneck, so LevelDB
+can appear competitive or faster.
+
 Columnar Ingestion Benchmark
 ----------------------------
 
