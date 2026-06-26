@@ -1119,17 +1119,6 @@ class GraphDB:
         else:
             return None
 
-    def delete_edge(self, edge_id):
-        """Delete an edge by key.
-
-        Args:
-            edge_id: Edge key as bytes.
-
-        Examples:
-            >>> graph_db.delete_edge(b"d1-p1")  # doctest: +SKIP
-        """
-        self.store.delete_edge(edge_id)
-
     # -----------
     # Example Range Query
     #  (Implementation depends on how you store indexes in the KVStore)
@@ -1475,32 +1464,29 @@ class GraphDB:
 
         # For each node in adjacency_accumulator, fetch old adjacency,
         # union with new edges, and store in final_adjacency dict
-        try:
-            for node_id, new_edges_source_target in adjacency_accumulator.items():
+        for node_id, new_edges_source_target in adjacency_accumulator.items():
 
-                # raw_adj = self.store.get_adjacency(node_key_serializer(node_id))
-                raw_adj = self.store.get_adjacency(node_id)
-                # raw_adj = self.store.get_adjacency(node_id)
-                if raw_adj is None:
-                    old_edges = {'source' : set(),'target' : set()}
-                else:
-                    old_edges = self.serializer.deserialize(raw_adj)
-                    if 'target' not in old_edges:
-                        old_edges['target'] = set()
-                    
-                    if 'source' not in old_edges:
-                        old_edges['source'] = set()
-                source_edges = old_edges['source']
-                target_edges = old_edges['target']
-                if 'source' in new_edges_source_target:
-                    source_edges = set(source_edges).union(new_edges_source_target['source'])
-                if 'target' in new_edges_source_target:
-                    target_edges = set(target_edges).union(new_edges_source_target['target'])
-                # Here we cast to list because some objects do not support set serialization. 
-                new_adj_value = {'source' : list(source_edges),'target' : list(target_edges)}
-                final_adjacency[node_id] = self.entity_serializer.serialize(new_adj_value,'AdjacencyList')
-        except:
-            return adjacency_accumulator, source_edges, target_edges
+            # raw_adj = self.store.get_adjacency(node_key_serializer(node_id))
+            raw_adj = self.store.get_adjacency(node_id)
+            # raw_adj = self.store.get_adjacency(node_id)
+            if raw_adj is None:
+                old_edges = {'source' : set(),'target' : set()}
+            else:
+                old_edges = self.serializer.deserialize(raw_adj)
+                if 'target' not in old_edges:
+                    old_edges['target'] = set()
+                
+                if 'source' not in old_edges:
+                    old_edges['source'] = set()
+            source_edges = old_edges['source']
+            target_edges = old_edges['target']
+            if 'source' in new_edges_source_target:
+                source_edges = set(source_edges).union(new_edges_source_target['source'])
+            if 'target' in new_edges_source_target:
+                target_edges = set(target_edges).union(new_edges_source_target['target'])
+            # Here we cast to list because some objects do not support set serialization. 
+            new_adj_value = {'source' : list(source_edges),'target' : list(target_edges)}
+            final_adjacency[node_id] = self.entity_serializer.serialize(new_adj_value,'AdjacencyList')
 
         # 5) One batch write for adjacency
         self.store.put_adjacency_bulk(final_adjacency)
@@ -1576,11 +1562,13 @@ class GraphDB:
             self.store.ingest_edges_columnar(chunk, append_only=append_only, native=native)
         return len(edge_list.edge_ids)
 
-    def query(self, cypher: str):
+    def query(self, cypher: str, parameters: Optional[dict[str, object]] = None):
         """Execute a supported read-only Cypher query.
 
         Args:
             cypher: Query text in the supported PyGraphDB Cypher subset.
+            parameters: Optional Cypher parameter values keyed without the
+                leading ``$``.
 
         Returns:
             ``pygraphdb.cypher.QueryResult`` containing projected records.
@@ -1591,7 +1579,7 @@ class GraphDB:
         """
         from .cypher import execute
 
-        return execute(self, cypher)
+        return execute(self, cypher, parameters=parameters)
 
     def close(self):
         """Close the underlying key-value store.

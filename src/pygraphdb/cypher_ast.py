@@ -1,0 +1,83 @@
+"""AST objects for the PyGraphDB Cypher subset."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Parameter:
+    """Cypher query parameter reference, such as ``$name``."""
+
+    name: str
+
+
+@dataclass(frozen=True)
+class PropertyRef:
+    """Reference to a variable property, such as ``n.name``."""
+
+    variable: str
+    property_name: str
+
+
+@dataclass(frozen=True)
+class ComparisonExpression:
+    """Binary comparison expression for the current Cypher subset."""
+
+    left: PropertyRef
+    operator: str
+    right: object
+
+
+@dataclass(frozen=True)
+class AndExpression:
+    """Conjunction of boolean expressions."""
+
+    expressions: tuple[object, ...]
+
+
+@dataclass(frozen=True)
+class TraversalHop:
+    """One typed relationship expansion in a parsed ``MATCH`` pattern."""
+
+    rel_var: str | None
+    edge_type: str
+    target_var: str
+    direction: str = "out"
+    edge_types: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class MatchQuery:
+    """Parsed anchored typed path query."""
+
+    source_var: str
+    source_id: str
+    hops: tuple[TraversalHop, ...]
+    returns: tuple[str, ...]
+    limit: int | None = None
+    where: object | None = None
+
+
+@dataclass(frozen=True)
+class SampleTypedPathsCall:
+    """Parsed ``pg.sample_typed_paths`` procedure call."""
+
+    seed_ids: list[str]
+    pattern: list[dict[str, object]]
+    returns: tuple[str, ...] = ("path",)
+    limit: int | None = None
+
+
+@dataclass(frozen=True)
+class NodeScanQuery:
+    """Parsed indexed node label scan query."""
+
+    variable: str
+    label: str
+    property_name: str | None
+    property_value: object
+    returns: tuple[str, ...]
+    limit: int | None = None
+    where: object | None = None
+    labels: tuple[str, ...] = ()
