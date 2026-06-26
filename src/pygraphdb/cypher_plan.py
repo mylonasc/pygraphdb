@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .cypher_ast import MatchQuery, NodeScanQuery, SampleTypedPathsCall, TraversalHop
+from .cypher_ast import MatchQuery, NodeScanQuery, RelationshipScanQuery, SampleTypedPathsCall, TraversalHop
 
 
 @dataclass(frozen=True)
@@ -32,11 +32,26 @@ class NodeLabelScan:
 
 
 @dataclass(frozen=True)
+class NodeAllScan:
+    """Scan all node IDs from the node store."""
+
+    variable: str
+
+
+@dataclass(frozen=True)
 class NodePropertySeek:
     """Seek node IDs from an exact property index."""
 
     property_name: str
     property_value: object
+
+
+@dataclass(frozen=True)
+class RelationshipTypeScan:
+    """Scan relationship IDs from the relationship type catalog."""
+
+    edge_types: tuple[str, ...]
+    rel_var: str | None
 
 
 @dataclass(frozen=True)
@@ -89,6 +104,8 @@ def plan_query(parsed) -> LogicalPlan:
         return _plan_node_scan(parsed)
     if isinstance(parsed, MatchQuery):
         return _plan_match(parsed)
+    if isinstance(parsed, RelationshipScanQuery):
+        return _plan_relationship_scan(parsed)
     if isinstance(parsed, SampleTypedPathsCall):
         operators = [ProcedureCall("pg.sample_typed_paths"), Project(parsed.returns)]
         if parsed.limit is not None:
@@ -98,7 +115,10 @@ def plan_query(parsed) -> LogicalPlan:
 
 
 def _plan_node_scan(parsed: NodeScanQuery) -> LogicalPlan:
-    operators: list[object] = [NodeLabelScan(parsed.label, parsed.variable, parsed.labels or (parsed.label,))]
+    if parsed.labels or parsed.label is not None:
+        operators: list[object] = [NodeLabelScan(parsed.label, parsed.variable, parsed.labels or (parsed.label,))]
+    else:
+        operators = [NodeAllScan(parsed.variable)]
     if parsed.property_name is not None:
         operators.append(NodePropertySeek(parsed.property_name, parsed.property_value))
         operators.append(FilterNodeProperty(parsed.variable, parsed.property_name, parsed.property_value))
@@ -116,6 +136,18 @@ def _plan_match(parsed: MatchQuery) -> LogicalPlan:
     if parsed.where is not None:
         operators.append(FilterExpression(parsed.where))
     operators.append(Project(parsed.returns))
+    if parsed.limit is not None:
+        operators.append(Limit(parsed.limit))
+    return LogicalPlan(tuple(operators))
+
+
+def _plan_relationship_scan(parsed: RelationshipScanQuery) -> LogicalPlan:
+    operators: list[object] = [RelationshipTypeScan(parsed.edge_types or (parsed.edge_type,), parsed.rel_var)]
+    if parsed.where is not None:
+        operators.append(FilterExpression(parsed.where))
+    operators.append(Project(parsed.returns))
+    if parsed.skip is not None:
+        operators.append(Limit(parsed.skip))
     if parsed.limit is not None:
         operators.append(Limit(parsed.limit))
     return LogicalPlan(tuple(operators))

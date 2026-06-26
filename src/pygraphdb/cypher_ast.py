@@ -30,10 +30,34 @@ class ComparisonExpression:
 
 
 @dataclass(frozen=True)
+class InExpression:
+    """Membership predicate, such as ``n.kind IN ["drug"]``."""
+
+    left: PropertyRef
+    values: object
+
+
+@dataclass(frozen=True)
+class NullPredicate:
+    """Null check predicate."""
+
+    expression: PropertyRef
+    negated: bool = False
+
+
+@dataclass(frozen=True)
 class AndExpression:
     """Conjunction of boolean expressions."""
 
     expressions: tuple[object, ...]
+
+
+@dataclass(frozen=True)
+class OrderItem:
+    """One ORDER BY item."""
+
+    expression: str
+    descending: bool = False
 
 
 @dataclass(frozen=True)
@@ -57,6 +81,10 @@ class MatchQuery:
     returns: tuple[str, ...]
     limit: int | None = None
     where: object | None = None
+    projections: tuple[str, ...] = ()
+    order_by: tuple[OrderItem, ...] = ()
+    skip: int | None = None
+    distinct: bool = False
 
 
 @dataclass(frozen=True)
@@ -74,10 +102,33 @@ class NodeScanQuery:
     """Parsed indexed node label scan query."""
 
     variable: str
-    label: str
+    label: str | None
     property_name: str | None
     property_value: object
     returns: tuple[str, ...]
     limit: int | None = None
     where: object | None = None
     labels: tuple[str, ...] = ()
+    projections: tuple[str, ...] = ()
+    order_by: tuple[OrderItem, ...] = ()
+    skip: int | None = None
+    distinct: bool = False
+
+
+@dataclass(frozen=True)
+class RelationshipScanQuery:
+    """Parsed unanchored typed relationship scan query."""
+
+    source_var: str
+    rel_var: str | None
+    edge_type: str
+    target_var: str
+    returns: tuple[str, ...]
+    direction: str = "out"
+    edge_types: tuple[str, ...] = ()
+    where: object | None = None
+    projections: tuple[str, ...] = ()
+    order_by: tuple[OrderItem, ...] = ()
+    skip: int | None = None
+    limit: int | None = None
+    distinct: bool = False

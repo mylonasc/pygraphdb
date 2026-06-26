@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from itertools import islice
 
-from .cypher_ast import AndExpression, ComparisonExpression, MatchQuery, NodeScanQuery, Parameter
+from .cypher_ast import AndExpression, ComparisonExpression, InExpression, MatchQuery, NodeScanQuery, NullPredicate, Parameter, RelationshipScanQuery
 
 
 @dataclass
@@ -43,11 +43,12 @@ def execute_match(parsed: MatchQuery, context: QueryContext) -> list[dict[str, o
     rows = anchored_node_seek(context, parsed.source_id, parsed.source_var)
     for hop in parsed.hops:
         rows = expand_typed(context, rows, hop)
-        if parsed.limit is not None and parsed.where is None:
+        can_push_limit = parsed.where is None and not parsed.order_by and parsed.skip is None and not parsed.distinct
+        if parsed.limit is not None and can_push_limit:
             rows = limit_rows(rows, parsed.limit)
     if parsed.where is not None:
         rows = filter_expression(rows, parsed.where, context)
-    return list(project_rows(rows, parsed.returns, limit=parsed.limit))
+    return materialize_results(rows, parsed)
 
 
 def execute_node_scan(parsed: NodeScanQuery, context: QueryContext) -> list[dict[str, object]]:
@@ -59,7 +60,15 @@ def execute_node_scan(parsed: NodeScanQuery, context: QueryContext) -> list[dict
         rows = filter_node_property(rows, parsed.variable, parsed.property_name, property_value)
     if parsed.where is not None:
         rows = filter_expression(rows, parsed.where, context)
-    return list(project_rows(rows, parsed.returns, limit=parsed.limit))
+    return materialize_results(rows, parsed)
+
+
+def execute_relationship_scan(parsed: RelationshipScanQuery, context: QueryContext) -> list[dict[str, object]]:
+    """Execute an unanchored typed relationship scan."""
+    rows = relationship_scan_rows(parsed, context)
+    if parsed.where is not None:
+        rows = filter_expression(rows, parsed.where, context)
+    return materialize_results(rows, parsed)
 
 
 def anchored_node_seek(context: QueryContext, source_id: str, source_var: str):
@@ -89,6 +98,9 @@ def node_scan_ids(parsed: NodeScanQuery, context: QueryContext):
 
 def _node_ids_for_labels(parsed: NodeScanQuery, context: QueryContext):
     labels = parsed.labels or (parsed.label,)
+    labels = tuple(label for label in labels if label is not None)
+    if not labels:
+        return context.graph.get_node_keys_generator()
     if len(labels) == 1:
         return context.graph.iter_node_ids_by_label(labels[0])
     matching_ids = None
@@ -110,6 +122,32 @@ def hydrate_node_ids(context: QueryContext, node_ids, variable: str):
         }
 
 
+def relationship_scan_rows(parsed: RelationshipScanQuery, context: QueryContext):
+    """Yield binding rows from relationship type index scans."""
+    for edge_type in parsed.edge_types or (parsed.edge_type,):
+        for edge_id in context.graph.iter_edge_ids_by_type(edge_type):
+            edge = context.get_edge(edge_id)
+            if edge is None:
+                continue
+            source_id = context.node_key_to_bytes(edge.source)
+            target_id = context.node_key_to_bytes(edge.target)
+            source_node = context.get_node(source_id)
+            target_node = context.get_node(target_id)
+            if source_node is None or target_node is None:
+                continue
+            bindings = {
+                parsed.source_var: source_node,
+                parsed.target_var: target_node,
+            }
+            if parsed.rel_var is not None:
+                bindings[parsed.rel_var] = edge
+            current_node_id = target_id if parsed.direction == "out" else source_id
+            yield {
+                "current_node_id": current_node_id,
+                "bindings": bindings,
+            }
+
+
 def filter_node_property(rows, variable: str, property_name: str, property_value):
     """Yield rows whose bound node has an exact property value."""
     for row in rows:
@@ -129,6 +167,15 @@ def evaluate_expression(expression, bindings: dict[str, object], context: QueryC
     """Evaluate a supported expression against one row of bindings."""
     if isinstance(expression, AndExpression):
         return all(evaluate_expression(part, bindings, context) for part in expression.expressions)
+    if isinstance(expression, InExpression):
+        left_value = project_value(bindings, f"{expression.left.variable}.{expression.left.property_name}")
+        values = context.resolve(expression.values)
+        if not isinstance(values, (list, tuple, set)):
+            raise ValueError("IN expects a list, tuple, or set value")
+        return left_value in values
+    if isinstance(expression, NullPredicate):
+        value = project_value(bindings, f"{expression.expression.variable}.{expression.expression.property_name}")
+        return value is not None if expression.negated else value is None
     if not isinstance(expression, ComparisonExpression):
         raise ValueError(f"Unsupported expression type: {type(expression).__name__}")
     left_value = project_value(bindings, f"{expression.left.variable}.{expression.left.property_name}")
@@ -187,11 +234,57 @@ def limit_rows(rows, limit: int | None):
     return islice(rows, limit)
 
 
-def project_rows(rows, returns: tuple[str, ...], limit: int | None = None):
+def project_rows(rows, returns: tuple[str, ...], projections: tuple[str, ...] = (), limit: int | None = None):
     """Project binding rows into result records."""
     limited_rows = limit_rows(rows, limit)
+    projection_items = projections or returns
     for row in limited_rows:
-        yield {column: project_value(row["bindings"], column) for column in returns}
+        yield {column: project_value(row["bindings"], projection) for column, projection in zip(returns, projection_items)}
+
+
+def materialize_results(rows, parsed) -> list[dict[str, object]]:
+    """Apply result shaping and return projected records."""
+    if not parsed.order_by and not parsed.distinct and parsed.skip is None:
+        return list(project_rows(rows, parsed.returns, projections=parsed.projections, limit=parsed.limit))
+    row_list = list(rows)
+    if parsed.order_by:
+        for order_item in reversed(parsed.order_by):
+            row_list.sort(
+                key=lambda row, expression=order_item.expression: _sortable_value(project_value(row["bindings"], expression)),
+                reverse=order_item.descending,
+            )
+    records = list(project_rows(row_list, parsed.returns, projections=parsed.projections))
+    if parsed.distinct:
+        records = _distinct_records(records, parsed.returns)
+    if parsed.skip is not None:
+        records = records[parsed.skip:]
+    if parsed.limit is not None:
+        records = records[:parsed.limit]
+    return records
+
+
+def _sortable_value(value):
+    return (value is None, value)
+
+
+def _distinct_records(records: list[dict[str, object]], columns: tuple[str, ...]) -> list[dict[str, object]]:
+    seen = set()
+    distinct = []
+    for record in records:
+        key = tuple(_hashable_value(record.get(column)) for column in columns)
+        if key in seen:
+            continue
+        seen.add(key)
+        distinct.append(record)
+    return distinct
+
+
+def _hashable_value(value):
+    if isinstance(value, list):
+        return tuple(_hashable_value(item) for item in value)
+    if isinstance(value, dict):
+        return tuple(sorted((key, _hashable_value(item)) for key, item in value.items()))
+    return value
 
 
 def project_value(bindings: dict[str, object], return_item: str):

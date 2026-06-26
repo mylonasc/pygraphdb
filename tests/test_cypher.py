@@ -3,7 +3,7 @@ import pytest
 from pygraphdb.graphdb import Edge, Node
 from pygraphdb.cypher import QueryResult, _split_top_level_args, execute, parse, plan
 from pygraphdb.cypher_ast import Parameter
-from pygraphdb.cypher_plan import Expand, Limit, NodeByIdSeek, NodeLabelScan, NodePropertySeek, ProcedureCall, Project
+from pygraphdb.cypher_plan import Expand, Limit, NodeAllScan, NodeByIdSeek, NodeLabelScan, NodePropertySeek, ProcedureCall, Project, RelationshipTypeScan
 from pygraphdb.cypher_parser import parse_literal
 from pygraphdb.cypher_runtime import QueryContext, execute_match, execute_node_scan, expand_typed
 
@@ -18,6 +18,7 @@ class FakeCypherGraph:
         self.labels = {}
         self.indexed_node_properties = set()
         self.label_yields = []
+        self.node_key_yields = []
 
     def put_node(self, node):
         node_id = node.get_id_bytes
@@ -52,6 +53,16 @@ class FakeCypherGraph:
         for node_id, node in self.nodes.items():
             if node.properties.get(property_name) == value:
                 yield node_id
+
+    def iter_edge_ids_by_type(self, edge_type):
+        for edge_id, edge in self.edges.items():
+            if edge.get_type == edge_type:
+                yield edge_id
+
+    def get_node_keys_generator(self):
+        for node_id in self.nodes:
+            self.node_key_yields.append(node_id)
+            yield node_id
 
     def iter_typed_adjacency(self, node_id, edge_type, direction="out"):
         directions = ["out", "in"] if direction == "any" else [direction]
@@ -189,6 +200,35 @@ def test_cypher_node_scan_where_inequality_without_backend():
     assert result.records == [{"n.id": "n1"}]
 
 
+def test_cypher_node_scan_where_in_without_backend():
+    graph = FakeCypherGraph()
+    graph.put_node(Node(node_id="n1", labels=["Person"], properties={"status": "active"}))
+    graph.put_node(Node(node_id="n2", labels=["Person"], properties={"status": "inactive"}))
+
+    result = execute(graph, 'MATCH (n:Person) WHERE n.status IN ["active", "pending"] RETURN n.id')
+
+    assert result.records == [{"n.id": "n1"}]
+
+
+def test_cypher_node_scan_where_parameterized_in_without_backend():
+    graph = FakeCypherGraph()
+    graph.put_node(Node(node_id="n1", labels=["Person"], properties={"status": "active"}))
+    graph.put_node(Node(node_id="n2", labels=["Person"], properties={"status": "inactive"}))
+
+    result = execute(graph, "MATCH (n:Person) WHERE n.status IN $statuses RETURN n.id", parameters={"statuses": ["inactive"]})
+
+    assert result.records == [{"n.id": "n2"}]
+
+
+def test_cypher_node_scan_where_null_predicates_without_backend():
+    graph = FakeCypherGraph()
+    graph.put_node(Node(node_id="n1", labels=["Person"], properties={}))
+    graph.put_node(Node(node_id="n2", labels=["Person"], properties={"name": "Alice"}))
+
+    assert execute(graph, "MATCH (n:Person) WHERE n.name IS NULL RETURN n.id").records == [{"n.id": "n1"}]
+    assert execute(graph, "MATCH (n:Person) WHERE n.name IS NOT NULL RETURN n.id").records == [{"n.id": "n2"}]
+
+
 def test_cypher_node_scan_where_and_without_backend():
     graph = FakeCypherGraph()
     graph.put_node(Node(node_id="n1", labels=["Person"], properties={"age": 40, "status": "active"}))
@@ -277,6 +317,59 @@ def test_cypher_reverse_traversal_supports_relationship_type_alternatives_withou
     assert result.records == [{"source.id": "source-a"}, {"source.id": "source-b"}]
 
 
+def test_cypher_unanchored_relationship_scan_without_backend():
+    graph = FakeCypherGraph()
+    graph.put_node(Node(node_id="drug-1"))
+    graph.put_node(Node(node_id="protein-1"))
+    graph.put_node(Node(node_id="ignored-1"))
+    graph.put_edge(Edge(edge_id="e1", source="drug-1", target="protein-1", properties={"type": "T"}))
+    graph.put_edge(Edge(edge_id="e2", source="drug-1", target="ignored-1", properties={"type": "ignored"}))
+
+    result = execute(graph, "MATCH (a)-[r:T]->(b) RETURN a.id AS source, r.id AS rel, b.id AS target")
+    parsed = parse("MATCH (a)-[r:T]->(b) RETURN a.id AS source, r.id AS rel, b.id AS target")
+
+    assert parsed.edge_type == "T"
+    assert result.records == [{"source": "drug-1", "rel": "e1", "target": "protein-1"}]
+
+
+def test_cypher_unanchored_relationship_scan_type_alternatives_without_backend():
+    graph = FakeCypherGraph()
+    graph.put_node(Node(node_id="a"))
+    graph.put_node(Node(node_id="b"))
+    graph.put_node(Node(node_id="c"))
+    graph.put_edge(Edge(edge_id="e1", source="a", target="b", properties={"type": "A"}))
+    graph.put_edge(Edge(edge_id="e2", source="a", target="c", properties={"type": "B"}))
+
+    result = execute(graph, "MATCH (a)-[r:A|B]->(b) RETURN r.id ORDER BY r.id")
+
+    assert result.records == [{"r.id": "e1"}, {"r.id": "e2"}]
+
+
+def test_cypher_unanchored_relationship_scan_where_and_return_star_without_backend():
+    graph = FakeCypherGraph()
+    graph.put_node(Node(node_id="a"))
+    graph.put_node(Node(node_id="b"))
+    graph.put_node(Node(node_id="c"))
+    graph.put_edge(Edge(edge_id="e1", source="a", target="b", properties={"type": "T", "score": 0.5}))
+    graph.put_edge(Edge(edge_id="e2", source="a", target="c", properties={"type": "T", "score": 0.9}))
+
+    result = execute(graph, "MATCH (a)-[r:T]->(b) WHERE r.score > 0.7 RETURN *")
+
+    assert result.columns == ("a", "r", "b")
+    assert result.records[0]["r"].get_id == "e2"
+    assert result.records[0]["b"].get_id == "c"
+
+
+def test_cypher_reverse_unanchored_relationship_scan_without_backend():
+    graph = FakeCypherGraph()
+    graph.put_node(Node(node_id="a"))
+    graph.put_node(Node(node_id="b"))
+    graph.put_edge(Edge(edge_id="e1", source="a", target="b", properties={"type": "T"}))
+
+    result = execute(graph, "MATCH (b)<-[r:T]-(a) RETURN a.id, b.id, r.id")
+    assert result.records == [{"a.id": "a", "b.id": "b", "r.id": "e1"}]
+
+
 def test_cypher_node_scan_where_rejects_unbound_variable_without_backend():
     with pytest.raises(ValueError, match="WHERE references unbound variable"):
         parse('MATCH (n:Drug) WHERE m.name = "Aspirin" RETURN n')
@@ -292,6 +385,91 @@ def test_cypher_label_scan_rejects_unbound_return_variable(graph_db):
         graph_db.query("MATCH (n:Drug) RETURN m")
 
 
+def test_cypher_all_node_scan_returns_nodes(graph_db):
+    graph_db.put_nodes([
+        Node(node_id="drug-1", labels=["Drug"]),
+        Node(node_id="protein-1", labels=["Protein"]),
+    ])
+
+    result = graph_db.query("MATCH (n) RETURN n.id")
+
+    assert result.records == [{"n.id": "drug-1"}, {"n.id": "protein-1"}]
+
+
+def test_cypher_all_node_scan_limit_stops_key_iteration_without_backend():
+    graph = FakeCypherGraph()
+    graph.put_node(Node(node_id="n1"))
+    graph.put_node(Node(node_id="n2"))
+    graph.put_node(Node(node_id="n3"))
+
+    result = execute(graph, "MATCH (n) RETURN n.id LIMIT 1")
+
+    parsed = parse("MATCH (n) RETURN n.id LIMIT 1")
+
+
+    assert parsed.label is None
+    assert parsed.labels == ()
+    assert result.records == [{"n.id": "n1"}]
+    assert graph.node_key_yields == [b"n1"]
+
+
+def test_cypher_all_node_scan_where_without_backend():
+    graph = FakeCypherGraph()
+    graph.put_node(Node(node_id="n1", properties={"kind": "drug"}))
+    graph.put_node(Node(node_id="n2", properties={"kind": "protein"}))
+
+    result = execute(graph, 'MATCH (n) WHERE n.kind = "drug" RETURN n.id')
+
+    assert result.records == [{"n.id": "n1"}]
+
+
+def test_cypher_all_node_scan_where_parameter_without_backend():
+    graph = FakeCypherGraph()
+    graph.put_node(Node(node_id="n1", properties={"age": 30}))
+    graph.put_node(Node(node_id="n2", properties={"age": 40}))
+
+    result = execute(graph, "MATCH (n) WHERE n.age > $age RETURN n.id", parameters={"age": 35})
+    assert result.records == [{"n.id": "n2"}]
+
+
+def test_cypher_all_node_scan_order_skip_limit_without_backend():
+    graph = FakeCypherGraph()
+    graph.put_node(Node(node_id="n1", properties={"age": 30}))
+    graph.put_node(Node(node_id="n2", properties={"age": 40}))
+    graph.put_node(Node(node_id="n3", properties={"age": 20}))
+
+    result = execute(graph, "MATCH (n) RETURN n.id ORDER BY n.age DESC SKIP 1 LIMIT 1")
+    parsed = parse("MATCH (n) RETURN n.id ORDER BY n.age DESC SKIP 1 LIMIT 1")
+
+    assert parsed.order_by[0].expression == "n.age"
+    assert parsed.order_by[0].descending is True
+    assert parsed.skip == 1
+    assert result.records == [{"n.id": "n1"}]
+
+
+def test_cypher_all_node_scan_return_distinct_without_backend():
+    graph = FakeCypherGraph()
+    graph.put_node(Node(node_id="n1", properties={"kind": "drug"}))
+    graph.put_node(Node(node_id="n2", properties={"kind": "drug"}))
+    graph.put_node(Node(node_id="n3", properties={"kind": "protein"}))
+
+    result = execute(graph, "MATCH (n) RETURN DISTINCT n.kind ORDER BY n.kind")
+
+    assert result.records == [{"n.kind": "drug"}, {"n.kind": "protein"}]
+
+
+def test_cypher_all_node_scan_return_star_without_backend():
+    graph = FakeCypherGraph()
+    graph.put_node(Node(node_id="n1"))
+
+    result = execute(graph, "MATCH (n) RETURN *")
+    parsed = parse("MATCH (n) RETURN *")
+
+    assert parsed.returns == ("n",)
+    assert result.columns == ("n",)
+    assert result.records[0]["n"].get_id == "n1"
+
+
 def test_cypher_label_scan_can_project_properties(graph_db):
     graph_db.put_nodes([
         Node(node_id="drug-1", labels=["Drug"], properties={"name": "Aspirin"}),
@@ -305,6 +483,18 @@ def test_cypher_label_scan_can_project_properties(graph_db):
         {"n.id": "drug-1", "n.name": "Aspirin"},
         {"n.id": "drug-2", "n.name": "Ibuprofen"},
     ]
+
+
+def test_cypher_label_scan_can_alias_return_items(graph_db):
+    graph_db.put_node(Node(node_id="drug-1", labels=["Drug"], properties={"name": "Aspirin"}))
+
+    result = graph_db.query("MATCH (n:Drug) RETURN n.id AS id, n.name AS name")
+    parsed = parse("MATCH (n:Drug) RETURN n.id AS id, n.name AS name")
+
+    assert parsed.returns == ("id", "name")
+    assert parsed.projections == ("n.id", "n.name")
+    assert result.columns == ("id", "name")
+    assert result.records == [{"id": "drug-1", "name": "Aspirin"}]
 
 
 def test_cypher_label_scan_limit_restricts_results(graph_db):
@@ -426,6 +616,34 @@ def test_cypher_typed_match_can_project_node_and_relationship_properties(graph_d
         {"d.id": "drug-1", "r.type": "drug-to-protein", "p.kind": "protein"},
         {"d.id": "drug-1", "r.type": "drug-to-protein", "p.kind": "protein"},
     ]
+
+
+def test_cypher_typed_match_can_alias_return_items_without_backend():
+    graph = FakeCypherGraph()
+    graph.put_node(Node(node_id="drug-1"))
+    graph.put_node(Node(node_id="protein-1"))
+    graph.put_edge(Edge(edge_id="e1", source="drug-1", target="protein-1", properties={"type": "T", "score": 0.9}))
+
+    result = execute(graph, 'MATCH (d {id: "drug-1"})-[r:T]->(p) RETURN r.score AS score, p.id AS protein')
+
+    assert result.columns == ("score", "protein")
+    assert result.records == [{"score": 0.9, "protein": "protein-1"}]
+
+
+def test_cypher_typed_match_return_star_without_backend():
+    graph = FakeCypherGraph()
+    graph.put_node(Node(node_id="drug-1"))
+    graph.put_node(Node(node_id="protein-1"))
+    graph.put_edge(Edge(edge_id="e1", source="drug-1", target="protein-1", properties={"type": "T"}))
+
+    result = execute(graph, 'MATCH (d {id: "drug-1"})-[r:T]->(p) RETURN *')
+    parsed = parse('MATCH (d {id: "drug-1"})-[r:T]->(p) RETURN *')
+
+    assert parsed.returns == ("d", "r", "p")
+    assert result.columns == ("d", "r", "p")
+    assert result.records[0]["d"].get_id == "drug-1"
+    assert result.records[0]["r"].get_id == "e1"
+    assert result.records[0]["p"].get_id == "protein-1"
 
 
 def test_cypher_typed_match_limit_restricts_results(graph_db):
@@ -631,7 +849,7 @@ def test_cypher_parser_rejects_malformed_match_queries(graph_db):
     with pytest.raises(ValueError, match="Unsupported Cypher query"):
         graph_db.query("RETURN n")
     with pytest.raises(ValueError, match="Unsupported Cypher query"):
-        graph_db.query('MATCH (d {id: "drug-1"}) RETURN d')
+        graph_db.query("MATCH () RETURN n")
     with pytest.raises(ValueError, match="Unsupported Cypher query"):
         graph_db.query('MATCH (d {id: "drug-1"})-[:rel]->(p)')
     with pytest.raises(ValueError, match="unbound variable"):
@@ -701,6 +919,13 @@ def test_logical_plan_for_multi_label_node_scan():
     assert logical_plan.operators[0].labels == ("Drug", "Approved")
 
 
+def test_logical_plan_for_all_node_scan():
+    logical_plan = plan("MATCH (n) RETURN n.id LIMIT 1")
+
+    assert isinstance(logical_plan.operators[0], NodeAllScan)
+    assert isinstance(logical_plan.operators[-1], Limit)
+
+
 def test_logical_plan_for_anchored_traversal():
     logical_plan = plan('MATCH (a {id: "n1"})-[:T]->(b) RETURN b.id')
 
@@ -716,6 +941,13 @@ def test_logical_plan_for_sampling_call():
 
     assert isinstance(logical_plan.operators[0], ProcedureCall)
     assert isinstance(logical_plan.operators[-1], Limit)
+
+
+def test_logical_plan_for_relationship_scan():
+    logical_plan = plan("MATCH (a)-[r:A|B]->(b) RETURN r.id")
+
+    assert isinstance(logical_plan.operators[0], RelationshipTypeScan)
+    assert logical_plan.operators[0].edge_types == ("A", "B")
 
 
 def test_query_context_caches_node_and_edge_hydration_without_backend():
@@ -791,4 +1023,4 @@ def test_runtime_match_operator_respects_limit_without_backend():
 
 def test_cypher_unsupported_query_raises_clear_error(graph_db):
     with pytest.raises(ValueError, match="Unsupported Cypher query"):
-        graph_db.query("MATCH (n) RETURN n")
+        graph_db.query("MATCH (n)-->(m) RETURN n")

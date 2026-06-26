@@ -10,10 +10,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .cypher_ast import MatchQuery, NodeScanQuery, SampleTypedPathsCall
+from .cypher_ast import MatchQuery, NodeScanQuery, RelationshipScanQuery, SampleTypedPathsCall
 from .cypher_plan import LogicalPlan, plan_query
 from .cypher_parser import parse as _parse_query, split_top_level_args as _split_top_level_args
-from .cypher_runtime import QueryContext, execute_match, execute_node_scan
+from .cypher_runtime import QueryContext, execute_match, execute_node_scan, execute_relationship_scan
 
 
 @dataclass(frozen=True)
@@ -43,7 +43,7 @@ class QueryResult:
         return len(self.records)
 
 
-def parse(query: str) -> MatchQuery | SampleTypedPathsCall | NodeScanQuery:
+def parse(query: str) -> MatchQuery | SampleTypedPathsCall | NodeScanQuery | RelationshipScanQuery:
     """Parse the supported Cypher subset.
 
     Args:
@@ -93,6 +93,9 @@ def execute(graph, query: str, parameters: dict[str, object] | None = None) -> Q
         )
     if isinstance(parsed, NodeScanQuery):
         records = execute_node_scan(parsed, QueryContext(graph=graph, parameters=parameters))
+        return QueryResult(columns=parsed.returns, records=records)
+    if isinstance(parsed, RelationshipScanQuery):
+        records = execute_relationship_scan(parsed, QueryContext(graph=graph, parameters=parameters))
         return QueryResult(columns=parsed.returns, records=records)
     records = execute_match(parsed, QueryContext(graph=graph, parameters=parameters))
     return QueryResult(columns=parsed.returns, records=records)
