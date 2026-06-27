@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .cypher_ast import MatchQuery, NodeScanQuery, RelationshipScanQuery, SampleTypedPathsCall, TraversalHop
+from .cypher_ast import AnchoredPatternClause, AndExpression, ComparisonExpression, MatchQuery, MultiMatchQuery, NodePatternClause, NodeScanQuery, RelationshipPatternClause, RelationshipScanQuery, SampleTypedPathsCall, TraversalHop
 
 
 @dataclass(frozen=True)
@@ -52,6 +52,25 @@ class RelationshipTypeScan:
 
     edge_types: tuple[str, ...]
     rel_var: str | None
+
+
+@dataclass(frozen=True)
+class RelationshipPropertySeek:
+    """Seek relationship IDs from a composite type/property exact index."""
+
+    rel_var: str
+    property_name: str
+    property_value: object
+
+
+@dataclass(frozen=True)
+class RelationshipPropertyRangeSeek:
+    """Seek relationship IDs from a composite type/property range index."""
+
+    rel_var: str
+    property_name: str
+    operator: str
+    property_value: object
 
 
 @dataclass(frozen=True)
@@ -106,6 +125,8 @@ def plan_query(parsed) -> LogicalPlan:
         return _plan_match(parsed)
     if isinstance(parsed, RelationshipScanQuery):
         return _plan_relationship_scan(parsed)
+    if isinstance(parsed, MultiMatchQuery):
+        return _plan_multi_match(parsed)
     if isinstance(parsed, SampleTypedPathsCall):
         operators = [ProcedureCall("pg.sample_typed_paths"), Project(parsed.returns)]
         if parsed.limit is not None:
@@ -143,6 +164,7 @@ def _plan_match(parsed: MatchQuery) -> LogicalPlan:
 
 def _plan_relationship_scan(parsed: RelationshipScanQuery) -> LogicalPlan:
     operators: list[object] = [RelationshipTypeScan(parsed.edge_types or (parsed.edge_type,), parsed.rel_var)]
+    operators.extend(_relationship_property_seek_operators(parsed))
     if parsed.where is not None:
         operators.append(FilterExpression(parsed.where))
     operators.append(Project(parsed.returns))
@@ -151,3 +173,44 @@ def _plan_relationship_scan(parsed: RelationshipScanQuery) -> LogicalPlan:
     if parsed.limit is not None:
         operators.append(Limit(parsed.limit))
     return LogicalPlan(tuple(operators))
+
+
+def _plan_multi_match(parsed: MultiMatchQuery) -> LogicalPlan:
+    operators: list[object] = []
+    for clause in parsed.clauses:
+        if isinstance(clause, NodePatternClause):
+            if clause.labels or clause.label is not None:
+                operators.append(NodeLabelScan(clause.label, clause.variable, clause.labels or (clause.label,)))
+            else:
+                operators.append(NodeAllScan(clause.variable))
+            if clause.property_name is not None:
+                operators.append(NodePropertySeek(clause.property_name, clause.property_value))
+                operators.append(FilterNodeProperty(clause.variable, clause.property_name, clause.property_value))
+        elif isinstance(clause, RelationshipPatternClause):
+            operators.append(RelationshipTypeScan(clause.edge_types or (clause.edge_type,), clause.rel_var))
+        elif isinstance(clause, AnchoredPatternClause):
+            operators.append(NodeByIdSeek(clause.source_id, clause.source_var))
+            operators.extend(Expand(hop) for hop in clause.hops)
+    if parsed.where is not None:
+        operators.append(FilterExpression(parsed.where))
+    operators.append(Project(parsed.returns))
+    if parsed.limit is not None:
+        operators.append(Limit(parsed.limit))
+    return LogicalPlan(tuple(operators))
+
+
+def _relationship_property_seek_operators(parsed: RelationshipScanQuery) -> list[object]:
+    if parsed.rel_var is None or parsed.where is None:
+        return []
+    operators = []
+    expressions = parsed.where.expressions if isinstance(parsed.where, AndExpression) else (parsed.where,)
+    for expression in expressions:
+        if not isinstance(expression, ComparisonExpression):
+            continue
+        if expression.left.variable != parsed.rel_var:
+            continue
+        if expression.operator == "=":
+            operators.append(RelationshipPropertySeek(parsed.rel_var, expression.left.property_name, expression.right))
+        elif expression.operator in {"<", "<=", ">", ">="}:
+            operators.append(RelationshipPropertyRangeSeek(parsed.rel_var, expression.left.property_name, expression.operator, expression.right))
+    return operators

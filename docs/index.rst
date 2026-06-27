@@ -2,11 +2,12 @@ PyGraphDB Documentation
 =======================
 
 PyGraphDB is a pure Python graph database toolkit for attributed graphs. It
-stores nodes, edges, adjacency lists, and typed adjacency indexes on key-value
-backends such as LMDB and LevelDB.
+stores nodes, edges, labels, typed adjacency records, and indexes on embedded
+key-value backends such as LMDB, LevelDB, and RocksDB/PyRex.
 
-The documentation focuses on practical examples: creating graphs, choosing a
-backend, serializing properties, traversing typed edges, and sampling subgraphs.
+Start with the quickstart if you want to create a graph and run a query. Use the
+topic pages for backend selection, serializers, Cypher syntax, ingestion,
+sampling, and benchmarks.
 
 .. toctree::
    :maxdepth: 2
@@ -19,7 +20,6 @@ backend, serializing properties, traversing typed edges, and sampling subgraphs.
    typed-sampling
    cypher
    performance
-   arcadedb-benchmarks
    notebooks
 
 .. toctree::
@@ -39,8 +39,8 @@ Quick Example
 
    graph_db = GraphDB(LMDBStore(path="graph_lmdb_example"), PickleSerializer())
 
-   alice = Node(node_id="alice", properties={"kind": "person"})
-   bob = Node(node_id="bob", properties={"kind": "person"})
+   alice = Node(node_id="alice", labels=["Person"], properties={"name": "Alice"})
+   bob = Node(node_id="bob", labels=["Person"], properties={"name": "Bob"})
    graph_db.put_node(alice)
    graph_db.put_node(bob)
 
@@ -51,7 +51,7 @@ Quick Example
        properties={"type": "knows", "since": 2024},
    ))
 
-   print(graph_db.get_node(b"alice").properties)
-   print(graph_db.neighbors_by_edge_type("alice", "knows", direction="out"))
+   result = graph_db.query('MATCH (a:Person {name: "Alice"}) MATCH (a)-[:knows]->(b) RETURN a.id, b.name')
+   print(result.records)
 
    graph_db.close()

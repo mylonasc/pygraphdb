@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from itertools import islice
 
-from .cypher_ast import AndExpression, ComparisonExpression, InExpression, MatchQuery, NodeScanQuery, NullPredicate, Parameter, RelationshipScanQuery
+from .cypher_ast import AnchoredPatternClause, AndExpression, ComparisonExpression, InExpression, MatchQuery, MultiMatchQuery, NodePatternClause, NodeScanQuery, NullPredicate, Parameter, RelationshipPatternClause, RelationshipScanQuery
 
 
 @dataclass
@@ -71,6 +71,23 @@ def execute_relationship_scan(parsed: RelationshipScanQuery, context: QueryConte
     return materialize_results(rows, parsed)
 
 
+def execute_multi_match(parsed: MultiMatchQuery, context: QueryContext) -> list[dict[str, object]]:
+    """Execute multiple MATCH clauses as a streaming row pipeline."""
+    rows = iter([{"current_node_id": None, "bindings": {}}])
+    for clause in parsed.clauses:
+        if isinstance(clause, NodePatternClause):
+            rows = apply_node_pattern_clause(rows, clause, context)
+        elif isinstance(clause, RelationshipPatternClause):
+            rows = apply_relationship_pattern_clause(rows, clause, context)
+        elif isinstance(clause, AnchoredPatternClause):
+            rows = apply_anchored_pattern_clause(rows, clause, context)
+        else:
+            raise ValueError(f"Unsupported MATCH clause type: {type(clause).__name__}")
+    if parsed.where is not None:
+        rows = filter_expression(rows, parsed.where, context)
+    return materialize_results(rows, parsed)
+
+
 def anchored_node_seek(context: QueryContext, source_id: str, source_var: str):
     """Yield one initial row for an ID lookup when the source node exists."""
     source_id_bytes = context.node_key_to_bytes(source_id)
@@ -84,16 +101,77 @@ def anchored_node_seek(context: QueryContext, source_id: str, source_var: str):
 
 
 def node_scan_ids(parsed: NodeScanQuery, context: QueryContext):
-    """Yield node IDs for a label scan, using an exact property index when available."""
+    """Yield node IDs for a label scan, using property indexes when available."""
     if parsed.limit == 0:
         return iter(())
     label_ids = _node_ids_for_labels(parsed, context)
+    range_scan = _node_range_scan(parsed, context)
+    if range_scan is not None and parsed.property_name is None:
+        return range_scan
     if parsed.property_name is None or parsed.property_name not in context.graph.indexed_node_properties:
         return label_ids
 
     property_value = context.resolve(parsed.property_value)
+    labels = tuple(label for label in (parsed.labels or (parsed.label,)) if label is not None)
+    if labels and hasattr(context.graph, "iter_node_ids_by_label_property"):
+        node_ids = set(context.graph.iter_node_ids_by_label_property(labels[0], parsed.property_name, property_value))
+        for label in labels[1:]:
+            node_ids = node_ids.intersection(context.graph.iter_node_ids_by_label(label))
+        return iter(sorted(node_ids))
     property_ids = set(context.graph.iter_node_ids_by_property(parsed.property_name, property_value))
     return iter(sorted(set(label_ids).intersection(property_ids)))
+
+
+def _node_range_scan(parsed: NodeScanQuery, context: QueryContext):
+    bounds = _range_bounds_for_node_scan(parsed, context)
+    if bounds is None:
+        return None
+    property_name, start_value, end_value, include_start, include_end = bounds
+    labels = tuple(label for label in (parsed.labels or (parsed.label,)) if label is not None)
+    if labels and hasattr(context.graph, "iter_node_ids_by_label_property_range"):
+        node_ids = set(context.graph.iter_node_ids_by_label_property_range(labels[0], property_name, start_value, end_value, include_start, include_end))
+        for label in labels[1:]:
+            node_ids = node_ids.intersection(context.graph.iter_node_ids_by_label(label))
+        return iter(sorted(node_ids))
+    if hasattr(context.graph, "iter_node_ids_by_property_range"):
+        return context.graph.iter_node_ids_by_property_range(property_name, start_value, end_value, include_start, include_end)
+    return None
+
+
+def _range_bounds_for_node_scan(parsed: NodeScanQuery, context: QueryContext):
+    if parsed.where is None:
+        return None
+    expressions = parsed.where.expressions if isinstance(parsed.where, AndExpression) else (parsed.where,)
+    property_name = None
+    start_value = None
+    end_value = None
+    include_start = True
+    include_end = True
+    found = False
+    for expression in expressions:
+        if not isinstance(expression, ComparisonExpression):
+            continue
+        if expression.left.variable != parsed.variable:
+            continue
+        if expression.operator not in {"<", "<=", ">", ">="}:
+            continue
+        if expression.left.property_name not in context.graph.indexed_node_properties:
+            continue
+        value = context.resolve(expression.right)
+        current_property = expression.left.property_name
+        if property_name is not None and property_name != current_property:
+            continue
+        property_name = current_property
+        found = True
+        if expression.operator in {">", ">="}:
+            start_value = value
+            include_start = expression.operator == ">="
+        else:
+            end_value = value
+            include_end = expression.operator == "<="
+    if not found:
+        return None
+    return property_name, start_value, end_value, include_start, include_end
 
 
 def _node_ids_for_labels(parsed: NodeScanQuery, context: QueryContext):
@@ -122,30 +200,228 @@ def hydrate_node_ids(context: QueryContext, node_ids, variable: str):
         }
 
 
+def apply_node_pattern_clause(rows, clause: NodePatternClause, context: QueryContext):
+    """Apply a node pattern to incoming rows."""
+    scan = NodeScanQuery(
+        variable=clause.variable,
+        label=clause.label,
+        property_name=clause.property_name,
+        property_value=clause.property_value,
+        returns=(clause.variable,),
+        labels=clause.labels,
+    )
+    for row in rows:
+        bound_node = row["bindings"].get(clause.variable)
+        if bound_node is not None:
+            if _node_matches_clause(bound_node, clause, context):
+                yield row
+            continue
+        for node_id in node_scan_ids(scan, context):
+            node = context.get_node(node_id)
+            if node is None:
+                continue
+            if not _node_matches_clause(node, clause, context):
+                continue
+            bindings = dict(row["bindings"])
+            bindings[clause.variable] = node
+            yield {"current_node_id": node_id, "bindings": bindings}
+
+
+def _node_matches_clause(node, clause: NodePatternClause, context: QueryContext) -> bool:
+    labels = clause.labels or ((clause.label,) if clause.label is not None else ())
+    if labels and not set(labels).issubset(set(getattr(node, "labels", ()))):
+        return False
+    if clause.property_name is not None:
+        return node.properties.get(clause.property_name) == context.resolve(clause.property_value)
+    return True
+
+
+def apply_relationship_pattern_clause(rows, clause: RelationshipPatternClause, context: QueryContext):
+    """Apply a relationship pattern to incoming rows."""
+    for row in rows:
+        source_node = row["bindings"].get(clause.source_var)
+        target_node = row["bindings"].get(clause.target_var)
+        if source_node is not None:
+            yield from _expand_relationship_from_source(row, source_node, clause, context)
+            continue
+        if target_node is not None:
+            yield from _expand_relationship_from_target(row, target_node, clause, context)
+            continue
+        scan = RelationshipScanQuery(
+            source_var=clause.source_var,
+            rel_var=clause.rel_var,
+            edge_type=clause.edge_type,
+            target_var=clause.target_var,
+            returns=(clause.source_var, clause.target_var),
+            direction=clause.direction,
+            edge_types=clause.edge_types,
+        )
+        for scanned_row in relationship_scan_rows(scan, context):
+            bindings = dict(row["bindings"])
+            if _merge_bindings(bindings, scanned_row["bindings"]):
+                yield {"current_node_id": scanned_row["current_node_id"], "bindings": bindings}
+
+
+def _expand_relationship_from_source(row, source_node, clause: RelationshipPatternClause, context: QueryContext):
+    source_id = context.node_key_to_bytes(source_node.get_id)
+    for edge_type in clause.edge_types or (clause.edge_type,):
+        for adjacency in context.graph.iter_typed_adjacency(source_id, edge_type, direction=clause.direction):
+            yield from _merge_relationship_adjacency(row, clause, context, adjacency)
+
+
+def _expand_relationship_from_target(row, target_node, clause: RelationshipPatternClause, context: QueryContext):
+    target_id = context.node_key_to_bytes(target_node.get_id)
+    direction = {"out": "in", "in": "out"}.get(clause.direction, "any")
+    for edge_type in clause.edge_types or (clause.edge_type,):
+        for adjacency in context.graph.iter_typed_adjacency(target_id, edge_type, direction=direction):
+            yield from _merge_relationship_adjacency(row, clause, context, adjacency)
+
+
+def _merge_relationship_adjacency(row, clause: RelationshipPatternClause, context: QueryContext, adjacency):
+    edge = context.get_edge(adjacency["edge_id"])
+    if edge is None:
+        return
+    source_id = context.node_key_to_bytes(edge.source)
+    target_id = context.node_key_to_bytes(edge.target)
+    source_node = context.get_node(source_id)
+    target_node = context.get_node(target_id)
+    if source_node is None or target_node is None:
+        return
+    new_bindings = {clause.source_var: source_node, clause.target_var: target_node}
+    if clause.rel_var is not None:
+        new_bindings[clause.rel_var] = edge
+    bindings = dict(row["bindings"])
+    if not _merge_bindings(bindings, new_bindings):
+        return
+    current_node_id = target_id if clause.direction == "out" else source_id
+    yield {"current_node_id": current_node_id, "bindings": bindings}
+
+
+def apply_anchored_pattern_clause(rows, clause: AnchoredPatternClause, context: QueryContext):
+    """Apply an anchored traversal clause to incoming rows."""
+    source_id_bytes = context.node_key_to_bytes(clause.source_id)
+    source_node = context.get_node(source_id_bytes)
+    if source_node is None:
+        return
+    for row in rows:
+        bindings = dict(row["bindings"])
+        if clause.source_var in bindings and not same_entity(bindings[clause.source_var], source_node):
+            continue
+        bindings[clause.source_var] = source_node
+        expanded = iter([{"current_node_id": source_id_bytes, "bindings": bindings}])
+        for hop in clause.hops:
+            expanded = expand_typed(context, expanded, hop)
+        yield from expanded
+
+
+def _merge_bindings(bindings: dict[str, object], new_bindings: dict[str, object]) -> bool:
+    for variable, value in new_bindings.items():
+        if variable in bindings and not same_entity(bindings[variable], value):
+            return False
+        bindings[variable] = value
+    return True
+
+
 def relationship_scan_rows(parsed: RelationshipScanQuery, context: QueryContext):
-    """Yield binding rows from relationship type index scans."""
+    """Yield binding rows from relationship type/property index scans."""
     for edge_type in parsed.edge_types or (parsed.edge_type,):
-        for edge_id in context.graph.iter_edge_ids_by_type(edge_type):
-            edge = context.get_edge(edge_id)
-            if edge is None:
-                continue
-            source_id = context.node_key_to_bytes(edge.source)
-            target_id = context.node_key_to_bytes(edge.target)
-            source_node = context.get_node(source_id)
-            target_node = context.get_node(target_id)
-            if source_node is None or target_node is None:
-                continue
-            bindings = {
-                parsed.source_var: source_node,
-                parsed.target_var: target_node,
-            }
-            if parsed.rel_var is not None:
-                bindings[parsed.rel_var] = edge
-            current_node_id = target_id if parsed.direction == "out" else source_id
-            yield {
-                "current_node_id": current_node_id,
-                "bindings": bindings,
-            }
+        for edge_id in _relationship_scan_edge_ids(parsed, context, edge_type):
+            yield from _hydrate_relationship_scan_edge(context, parsed, edge_id)
+
+
+def _relationship_scan_edge_ids(parsed: RelationshipScanQuery, context: QueryContext, edge_type: str):
+    exact_scan = _relationship_exact_scan(parsed, context, edge_type)
+    if exact_scan is not None:
+        return exact_scan
+    range_scan = _relationship_range_scan(parsed, context, edge_type)
+    if range_scan is not None:
+        return range_scan
+    return context.graph.iter_edge_ids_by_type(edge_type)
+
+
+def _relationship_exact_scan(parsed: RelationshipScanQuery, context: QueryContext, edge_type: str):
+    if parsed.rel_var is None or parsed.where is None:
+        return None
+    expressions = parsed.where.expressions if isinstance(parsed.where, AndExpression) else (parsed.where,)
+    for expression in expressions:
+        if not isinstance(expression, ComparisonExpression):
+            continue
+        if expression.left.variable != parsed.rel_var or expression.operator != "=":
+            continue
+        if expression.left.property_name not in getattr(context.graph, "indexed_edge_properties", set()):
+            continue
+        if hasattr(context.graph, "iter_edge_ids_by_type_property"):
+            return context.graph.iter_edge_ids_by_type_property(edge_type, expression.left.property_name, context.resolve(expression.right))
+    return None
+
+
+def _relationship_range_scan(parsed: RelationshipScanQuery, context: QueryContext, edge_type: str):
+    bounds = _range_bounds_for_relationship_scan(parsed, context)
+    if bounds is None:
+        return None
+    property_name, start_value, end_value, include_start, include_end = bounds
+    if hasattr(context.graph, "iter_edge_ids_by_type_property_range"):
+        return context.graph.iter_edge_ids_by_type_property_range(edge_type, property_name, start_value, end_value, include_start, include_end)
+    return None
+
+
+def _range_bounds_for_relationship_scan(parsed: RelationshipScanQuery, context: QueryContext):
+    if parsed.rel_var is None or parsed.where is None:
+        return None
+    expressions = parsed.where.expressions if isinstance(parsed.where, AndExpression) else (parsed.where,)
+    property_name = None
+    start_value = None
+    end_value = None
+    include_start = True
+    include_end = True
+    found = False
+    for expression in expressions:
+        if not isinstance(expression, ComparisonExpression):
+            continue
+        if expression.left.variable != parsed.rel_var:
+            continue
+        if expression.operator not in {"<", "<=", ">", ">="}:
+            continue
+        if expression.left.property_name not in getattr(context.graph, "indexed_edge_properties", set()):
+            continue
+        current_property = expression.left.property_name
+        if property_name is not None and property_name != current_property:
+            continue
+        property_name = current_property
+        found = True
+        value = context.resolve(expression.right)
+        if expression.operator in {">", ">="}:
+            start_value = value
+            include_start = expression.operator == ">="
+        else:
+            end_value = value
+            include_end = expression.operator == "<="
+    if not found:
+        return None
+    return property_name, start_value, end_value, include_start, include_end
+
+
+def _hydrate_relationship_scan_edge(context: QueryContext, parsed: RelationshipScanQuery, edge_id: bytes):
+    edge = context.get_edge(edge_id)
+    if edge is None:
+        return
+    source_id = context.node_key_to_bytes(edge.source)
+    target_id = context.node_key_to_bytes(edge.target)
+    source_node = context.get_node(source_id)
+    target_node = context.get_node(target_id)
+    if source_node is None or target_node is None:
+        return
+    bindings = {
+        parsed.source_var: source_node,
+        parsed.target_var: target_node,
+    }
+    if parsed.rel_var is not None:
+        bindings[parsed.rel_var] = edge
+    current_node_id = target_id if parsed.direction == "out" else source_id
+    yield {
+        "current_node_id": current_node_id,
+        "bindings": bindings,
+    }
 
 
 def filter_node_property(rows, variable: str, property_name: str, property_value):

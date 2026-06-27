@@ -70,24 +70,18 @@ native ``write_columnar_batch`` API through ``GraphDB.ingest_nodes_arrow`` and
 caller-provided serialized ``node_value`` and ``edge_value`` payloads and edge
 ingestion is append-only.
 
-Sorted Indexes
---------------
+Indexes
+-------
 
-All backends implement a small sorted index interface used by labels,
-relationship type catalogs, and explicit exact-match property indexes:
+All backends implement sorted index primitives used by labels, relationship type
+catalogs, property lookups, and range scans. The high-level indexes maintained by
+``GraphDB`` are:
 
-- ``put_index_entry(index_name, key_parts, value)``
-- ``put_index_entries_bulk(entries)``
-- ``delete_index_entry(index_name, key_parts, value)``
-- ``iter_index_prefix(index_name, key_parts)``
-
-These indexes are prefix-scanned by the backend rather than by deserializing all
-nodes or edges. Current high-level indexes include:
-
-- ``node_label`` for ``Node.labels`` and ``GraphDB.nodes_by_label``.
-- ``node_property`` for explicitly registered node properties.
-- ``edge_type`` for ``edge.properties["type"]`` and ``GraphDB.edges_by_type``.
-- ``edge_property`` for explicitly registered edge properties.
+- label indexes for ``Node.labels`` and ``GraphDB.nodes_by_label``
+- relationship type indexes for ``edge.properties["type"]`` and ``GraphDB.edges_by_type``
+- explicit node and edge property indexes
+- composite label/property and type/property indexes
+- scalar range indexes for indexed string and numeric properties
 
 Property indexes are intentionally explicit. Register them only for predicates
 you expect to use frequently:
@@ -96,6 +90,23 @@ you expect to use frequently:
 
    graph_db.create_node_property_index("name")
    graph_db.create_edge_property_index("score")
+
+   graph_db.nodes_by_property("name", "Aspirin")
+   graph_db.edges_by_property_range("score", 0.8, None)
+
+Cypher uses these indexes when possible for label/property scans and typed
+relationship predicates. Index definitions are persisted in backend metadata, so
+reopened databases continue maintaining the configured property indexes.
+
+Columnar ingestion keeps label, relationship type, property, composite, and range
+indexes current for configured indexed properties.
+
+Backend Index Interface
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Backend implementations expose lower-level sorted index methods such as
+``put_index_entry``, ``delete_index_entry``, ``iter_index_prefix``, and range
+index equivalents. Most users should prefer the ``GraphDB`` helpers above.
 
 Backend Selection Pattern
 -------------------------

@@ -10,7 +10,7 @@ from __future__ import annotations
 import ast
 import re
 
-from .cypher_ast import AndExpression, ComparisonExpression, InExpression, MatchQuery, NodeScanQuery, NullPredicate, OrderItem, Parameter, PropertyRef, RelationshipScanQuery, SampleTypedPathsCall, TraversalHop
+from .cypher_ast import AndExpression, AnchoredPatternClause, ComparisonExpression, InExpression, MatchQuery, MultiMatchQuery, NodePatternClause, NodeScanQuery, NullPredicate, OrderItem, Parameter, PropertyRef, RelationshipPatternClause, RelationshipScanQuery, SampleTypedPathsCall, TraversalHop
 
 
 _IDENTIFIER = r"[A-Za-z_][A-Za-z0-9_]*"
@@ -48,6 +48,18 @@ _NODE_SCAN_RE = re.compile(
     rf"(?:\s+ORDER\s+BY\s+(?P<order_by>{_ORDER_ITEMS}))?(?:\s+SKIP\s+(?P<skip>\d+))?(?:\s+LIMIT\s+(?P<limit>\d+))?\s*;?\s*$",
     re.IGNORECASE | re.DOTALL,
 )
+_NODE_PATTERN_RE = re.compile(
+    rf"^\s*\((?P<var>{_IDENTIFIER})(?P<labels>(?::{_IDENTIFIER})*)(?:\s*\{{\s*(?P<property>{_IDENTIFIER})\s*:\s*(?P<value>.*?)\s*\}})?\)\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
+_REL_PATTERN_OUT_RE = re.compile(
+    rf"^\s*\((?P<source_var>{_IDENTIFIER})\)\s*-\s*\[(?:(?P<rel_var>{_IDENTIFIER})\s*)?:(?P<edge_type>[^\]\s]+)\]\s*->\s*\((?P<target_var>{_IDENTIFIER})\)\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
+_REL_PATTERN_IN_RE = re.compile(
+    rf"^\s*\((?P<target_var>{_IDENTIFIER})\)\s*<-\s*\[(?:(?P<rel_var>{_IDENTIFIER})\s*)?:(?P<edge_type>[^\]\s]+)\]\s*-\s*\((?P<source_var>{_IDENTIFIER})\)\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
 _REL_SCAN_OUT_RE = re.compile(
     rf"^\s*MATCH\s+\((?P<source_var>{_IDENTIFIER})\)\s*-\s*\[(?:(?P<rel_var>{_IDENTIFIER})\s*)?:(?P<edge_type>[^\]\s]+)\]\s*->\s*\((?P<target_var>{_IDENTIFIER})\)\s+"
     rf"(?:WHERE\s+(?P<where>.*?)\s+)?RETURN\s+(?:(?P<distinct>DISTINCT)\s+)?(?P<returns>{_RETURN_ITEMS})"
@@ -80,11 +92,14 @@ _CALL_SAMPLE_RE = re.compile(
 )
 
 
-def parse(query: str) -> MatchQuery | SampleTypedPathsCall | NodeScanQuery | RelationshipScanQuery:
+def parse(query: str) -> MatchQuery | SampleTypedPathsCall | NodeScanQuery | RelationshipScanQuery | MultiMatchQuery:
     """Parse the supported Cypher subset into AST objects."""
     stripped = query.strip()
     if re.match(r"^CALL\s+pg\.sample_typed_paths\b", stripped, re.IGNORECASE):
         return _parse_sample_typed_paths(stripped)
+    multi_match = _parse_multi_match(stripped)
+    if multi_match is not None:
+        return multi_match
     node_scan = _parse_node_scan(stripped)
     if node_scan is not None:
         return node_scan
@@ -92,6 +107,91 @@ def parse(query: str) -> MatchQuery | SampleTypedPathsCall | NodeScanQuery | Rel
     if rel_scan is not None:
         return rel_scan
     return _parse_match(stripped)
+
+
+def _parse_multi_match(query: str) -> MultiMatchQuery | None:
+    if len(re.findall(r"\bMATCH\b", query, re.IGNORECASE)) < 2:
+        return None
+    split_at = _find_return_suffix_start(query)
+    if split_at is None:
+        raise unsupported_query_error()
+    match_text = query[:split_at]
+    return_match = _RETURN_RE.match(query[split_at:])
+    if return_match is None:
+        raise unsupported_query_error()
+    pattern_texts = [part.strip() for part in re.split(r"\bMATCH\b", match_text, flags=re.IGNORECASE) if part.strip()]
+    clauses = tuple(_parse_match_clause_pattern(pattern_text) for pattern_text in pattern_texts)
+    ordered_variables = _multi_match_bound_variables_ordered(clauses)
+    bound_variables = set(ordered_variables)
+    where = None
+    if return_match.group("where") is not None:
+        where = _parse_where_expression(return_match.group("where"), bound_variables)
+    returns, projections = _parse_returns(return_match.group("returns"), ordered_variables)
+    unknown = [name for name in _return_variables(projections) if name not in bound_variables]
+    if unknown:
+        raise ValueError(f"RETURN references unbound variable(s): {', '.join(unknown)}")
+    return MultiMatchQuery(
+        clauses=clauses,
+        returns=returns,
+        where=where,
+        projections=projections,
+        order_by=_parse_order_by(return_match.group("order_by")),
+        skip=_parse_limit(return_match.group("skip")),
+        limit=_parse_limit(return_match.group("limit")),
+        distinct=return_match.group("distinct") is not None,
+    )
+
+
+def _find_return_suffix_start(query: str) -> int | None:
+    for match in re.finditer(r"\b(?:WHERE|RETURN)\b", query, re.IGNORECASE):
+        if _RETURN_RE.match(query[match.start():]) is not None:
+            return match.start()
+    return None
+
+
+def _parse_match_clause_pattern(pattern_text: str):
+    node_match = _NODE_PATTERN_RE.match(pattern_text)
+    if node_match is not None:
+        labels = tuple(part for part in node_match.group("labels").split(":") if part)
+        property_value = None
+        if node_match.group("property") is not None:
+            property_value = parse_literal(node_match.group("value"))
+        return NodePatternClause(
+            variable=node_match.group("var"),
+            label=labels[0] if labels else None,
+            property_name=node_match.group("property"),
+            property_value=property_value,
+            labels=labels,
+        )
+    relationship_match = _REL_PATTERN_OUT_RE.match(pattern_text)
+    direction = "out"
+    if relationship_match is None:
+        relationship_match = _REL_PATTERN_IN_RE.match(pattern_text)
+        direction = "in"
+    if relationship_match is not None:
+        edge_types = tuple(edge_type for edge_type in relationship_match.group("edge_type").split("|") if edge_type)
+        return RelationshipPatternClause(
+            source_var=relationship_match.group("source_var"),
+            rel_var=relationship_match.group("rel_var"),
+            edge_type=edge_types[0],
+            target_var=relationship_match.group("target_var"),
+            direction=direction,
+            edge_types=edge_types,
+        )
+    anchor_match = _ANCHOR_RE.match(pattern_text)
+    if anchor_match is not None:
+        remainder = pattern_text[anchor_match.end():]
+        hops = []
+        while True:
+            hop_match, direction = _match_hop(remainder)
+            if hop_match is None or direction is None:
+                break
+            edge_types = tuple(edge_type for edge_type in hop_match.group("edge_type").split("|") if edge_type)
+            hops.append(TraversalHop(hop_match.group("rel_var"), edge_types[0], hop_match.group("target_var"), direction, edge_types))
+            remainder = remainder[hop_match.end():]
+        if hops and not remainder.strip():
+            return AnchoredPatternClause(anchor_match.group("source_var"), anchor_match.group("source_id"), tuple(hops))
+    raise unsupported_query_error()
 
 
 def _parse_node_scan(query: str) -> NodeScanQuery | None:
@@ -375,6 +475,28 @@ def _relationship_bound_variables_ordered(match) -> tuple[str, ...]:
     if match.group("rel_var") is not None:
         variables.append(match.group("rel_var"))
     variables.append(match.group("target_var"))
+    return tuple(variables)
+
+
+def _multi_match_bound_variables_ordered(clauses: tuple[object, ...]) -> tuple[str, ...]:
+    variables = []
+
+    def add(variable):
+        if variable is not None and variable not in variables:
+            variables.append(variable)
+
+    for clause in clauses:
+        if isinstance(clause, NodePatternClause):
+            add(clause.variable)
+        elif isinstance(clause, RelationshipPatternClause):
+            add(clause.source_var)
+            add(clause.rel_var)
+            add(clause.target_var)
+        elif isinstance(clause, AnchoredPatternClause):
+            add(clause.source_var)
+            for hop in clause.hops:
+                add(hop.rel_var)
+                add(hop.target_var)
     return tuple(variables)
 
 

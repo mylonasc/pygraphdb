@@ -20,6 +20,9 @@ def test_kvstore_abstract_methods_raise_not_implemented():
         lambda: store.delete(b"k"),
         lambda: list(store.range_iter(b"a", b"z")),
         store.close,
+        lambda: store.put_metadata(b"k", b"v"),
+        lambda: store.get_metadata(b"k"),
+        lambda: store.delete_metadata(b"k"),
         lambda: store.put_node(b"n", b"v"),
         lambda: store.get_node(b"n"),
         lambda: store.delete_node(b"n"),
@@ -79,3 +82,11 @@ def test_store_sorted_index_delete_entry(graph_db):
     graph_db.store.delete_index_entry("node_label", [b"Drug"], b"drug-1")
 
     assert list(graph_db.store.iter_index_prefix("node_label", [b"Drug"])) == []
+
+
+def test_store_metadata_round_trip(graph_db):
+    graph_db.store.put_metadata(b"schema", b"value")
+    assert graph_db.store.get_metadata(b"schema") == b"value"
+
+    graph_db.store.delete_metadata(b"schema")
+    assert graph_db.store.get_metadata(b"schema") is None

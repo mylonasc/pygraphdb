@@ -12,7 +12,7 @@ sys.path.insert(0, str(ROOT / "src"))
 project = "PyGraphDB"
 author = "PyGraphDB contributors"
 copyright = "2026, PyGraphDB contributors"
-release = "0.1.0"
+release = "0.2.0a0"
 
 extensions = [
     "sphinx.ext.autodoc",

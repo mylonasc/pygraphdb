@@ -81,6 +81,22 @@ def _index_prefix(index_name, key_parts) -> bytes:
     return b"I" + _TYPED_ADJ_SEP + _TYPED_ADJ_SEP.join(parts) + _TYPED_ADJ_SEP
 
 
+def _range_index_key(index_name, key_parts, range_value: bytes, value=b"") -> bytes:
+    """Build a sorted range index key."""
+    parts = [_index_part(index_name)]
+    parts.extend(_index_part(part) for part in key_parts)
+    parts.append(range_value)
+    parts.append(_index_part(value))
+    return b"R" + _TYPED_ADJ_SEP + _TYPED_ADJ_SEP.join(parts)
+
+
+def _range_index_prefix(index_name, key_parts) -> bytes:
+    """Build the prefix used for sorted range index scans."""
+    parts = [_index_part(index_name)]
+    parts.extend(_index_part(part) for part in key_parts)
+    return b"R" + _TYPED_ADJ_SEP + _TYPED_ADJ_SEP.join(parts) + _TYPED_ADJ_SEP
+
+
 def _missing_dependency_error(package_name, install_name=None, feature_name=None):
     """Build a consistent optional dependency error.
 
@@ -158,6 +174,18 @@ class KVStore:
 
     def close(self):
         """Close any resources owned by the store."""
+        raise NotImplementedError
+
+    def put_metadata(self, key: bytes, value: bytes):
+        """Store a metadata key/value pair."""
+        raise NotImplementedError
+
+    def get_metadata(self, key: bytes) -> bytes:
+        """Return a metadata value by key."""
+        raise NotImplementedError
+
+    def delete_metadata(self, key: bytes):
+        """Delete a metadata key/value pair."""
         raise NotImplementedError
 
     # The specialized node/edge methods:
@@ -274,6 +302,23 @@ class KVStore:
         """
         raise NotImplementedError
 
+    def put_range_index_entry(self, index_name: str, key_parts: list[bytes], range_value: bytes, value: bytes):
+        """Store one sorted range index entry."""
+        raise NotImplementedError
+
+    def put_range_index_entries_bulk(self, entries: list[tuple[str, list[bytes], bytes, bytes]]):
+        """Store many sorted range index entries."""
+        for index_name, key_parts, range_value, value in entries:
+            self.put_range_index_entry(index_name, key_parts, range_value, value)
+
+    def delete_range_index_entry(self, index_name: str, key_parts: list[bytes], range_value: bytes, value: bytes):
+        """Delete one sorted range index entry."""
+        raise NotImplementedError
+
+    def iter_range_index(self, index_name: str, key_parts: list[bytes], start_value: bytes | None = None, end_value: bytes | None = None, include_start: bool = True, include_end: bool = True):
+        """Yield values whose range index key falls between start and end values."""
+        raise NotImplementedError
+
     def ingest_nodes_columnar(self, node_list, *, native: bool = True):
         """Store columnar nodes with caller-provided serialized values."""
         self.put_nodes_bulk(dict(zip(node_list.node_ids, node_list.node_values)))
@@ -364,7 +409,7 @@ class LMDBStore(KVStore):
         except ImportError as exc:
             raise _missing_dependency_error("lmdb", feature_name="LMDBStore") from exc
 
-        max_dbs = 5
+        max_dbs = 6
         if map_keys:
             max_dbs += 2
         self.env = lmdb.open(path, map_size=map_size, subdir=True, max_dbs=max_dbs)
@@ -373,6 +418,7 @@ class LMDBStore(KVStore):
         self.adj_db   = self.env.open_db(b'adj')
         self.typed_adj_db = self.env.open_db(b'typed_adj')
         self.index_db = self.env.open_db(b'index')
+        self.metadata_db = self.env.open_db(b'metadata')
 
         if map_keys:
             self.node_key_encdec_db = self.env.open_db(b'node_key_db')
@@ -411,6 +457,21 @@ class LMDBStore(KVStore):
     def close(self):
         """Close the LMDB environment."""
         self.env.close()
+
+    def put_metadata(self, key: bytes, value: bytes):
+        """Store a metadata key/value pair."""
+        with self.env.begin(write=True, db=self.metadata_db) as txn:
+            txn.put(key, value)
+
+    def get_metadata(self, key: bytes) -> bytes:
+        """Return a metadata value by key, or ``None``."""
+        with self.env.begin(write=False, db=self.metadata_db) as txn:
+            return txn.get(key)
+
+    def delete_metadata(self, key: bytes):
+        """Delete a metadata key/value pair."""
+        with self.env.begin(write=True, db=self.metadata_db) as txn:
+            txn.delete(key)
 
     # -- Specialized node methods
     def put_node(self, node_id: bytes, value: bytes):
@@ -607,6 +668,40 @@ class LMDBStore(KVStore):
                     break
                 yield value
 
+    def put_range_index_entry(self, index_name: str, key_parts: list[bytes], range_value: bytes, value: bytes):
+        """Store one sorted range index entry."""
+        with self.env.begin(write=True, db=self.index_db) as txn:
+            txn.put(_range_index_key(index_name, key_parts, range_value, value), value)
+
+    def put_range_index_entries_bulk(self, entries: list[tuple[str, list[bytes], bytes, bytes]]):
+        """Store many sorted range index entries in one transaction."""
+        with self.env.begin(write=True, db=self.index_db) as txn:
+            for index_name, key_parts, range_value, value in entries:
+                txn.put(_range_index_key(index_name, key_parts, range_value, value), value)
+
+    def delete_range_index_entry(self, index_name: str, key_parts: list[bytes], range_value: bytes, value: bytes):
+        """Delete one sorted range index entry."""
+        with self.env.begin(write=True, db=self.index_db) as txn:
+            txn.delete(_range_index_key(index_name, key_parts, range_value, value))
+
+    def iter_range_index(self, index_name: str, key_parts: list[bytes], start_value: bytes | None = None, end_value: bytes | None = None, include_start: bool = True, include_end: bool = True):
+        """Yield values whose range index key falls between start and end values."""
+        prefix = _range_index_prefix(index_name, key_parts)
+        start_key = prefix if start_value is None else prefix + start_value
+        with self.env.begin(write=False, db=self.index_db) as txn:
+            cursor = txn.cursor()
+            if not cursor.set_range(start_key):
+                return
+            for key, value in cursor:
+                if not key.startswith(prefix):
+                    break
+                range_value = key[len(prefix):].split(_TYPED_ADJ_SEP, 1)[0]
+                if start_value is not None and (range_value < start_value or (range_value == start_value and not include_start)):
+                    continue
+                if end_value is not None and (range_value > end_value or (range_value == end_value and not include_end)):
+                    break
+                yield value
+
 
 # =========================================
 # LevelDB Implementation
@@ -629,7 +724,7 @@ class LevelDBStore(KVStore):
         except ImportError as exc:
             raise _missing_dependency_error("plyvel", feature_name="LevelDBStore") from exc
         
-        self.db_paths = {'nodes' : os.path.join('nodes'), 'edges': os.path.join('edges'), 'adjacency' : os.path.join('adjacency'), 'typed_adjacency': os.path.join('typed_adjacency'), 'index': os.path.join('index')}
+        self.db_paths = {'nodes' : os.path.join('nodes'), 'edges': os.path.join('edges'), 'adjacency' : os.path.join('adjacency'), 'typed_adjacency': os.path.join('typed_adjacency'), 'index': os.path.join('index'), 'metadata': os.path.join('metadata')}
         if not os.path.exists(path):
             os.makedirs(path, exist_ok=True)
         self.db_nodes = plyvel.DB(os.path.join(path, 'nodes'), create_if_missing=True)
@@ -637,12 +732,14 @@ class LevelDBStore(KVStore):
         self.db_adj   = plyvel.DB(os.path.join(path, 'adjacency'), create_if_missing=True)
         self.db_typed_adj = plyvel.DB(os.path.join(path, 'typed_adjacency'), create_if_missing=True)
         self.db_index = plyvel.DB(os.path.join(path, 'index'), create_if_missing=True)
+        self.db_metadata = plyvel.DB(os.path.join(path, 'metadata'), create_if_missing=True)
         self.db_dict = {
             'nodes' : self.db_nodes,
             'edges' : self.db_edges,
             'adjacency' : self.db_adj,
             'typed_adjacency': self.db_typed_adj,
             'index': self.db_index,
+            'metadata': self.db_metadata,
         }
     # def put(self, key: bytes, value: bytes):
     #     self.db.put(key, value)
@@ -670,6 +767,18 @@ class LevelDBStore(KVStore):
         with self.db.iterator(start=start_key, stop=end_key) as it:
             for k, v in it:
                 yield k, v
+
+    def put_metadata(self, key: bytes, value: bytes):
+        """Store a metadata key/value pair."""
+        self.db_metadata.put(key, value)
+
+    def get_metadata(self, key: bytes) -> bytes:
+        """Return a metadata value by key, or ``None``."""
+        return self.db_metadata.get(key)
+
+    def delete_metadata(self, key: bytes):
+        """Delete a metadata key/value pair."""
+        self.db_metadata.delete(key)
 
     def get_db_iterator(self, which_db = 'nodes'):
         """Yield all records from a named sub-database."""
@@ -847,8 +956,38 @@ class LevelDBStore(KVStore):
             for _, value in it:
                 yield value
 
+    def put_range_index_entry(self, index_name: str, key_parts: list[bytes], range_value: bytes, value: bytes):
+        """Store one sorted range index entry."""
+        self.db_index.put(_range_index_key(index_name, key_parts, range_value, value), value)
+
+    def put_range_index_entries_bulk(self, entries: list[tuple[str, list[bytes], bytes, bytes]]):
+        """Store many sorted range index entries in one write batch."""
+        with self.db_index.write_batch() as wb:
+            for index_name, key_parts, range_value, value in entries:
+                wb.put(_range_index_key(index_name, key_parts, range_value, value), value)
+
+    def delete_range_index_entry(self, index_name: str, key_parts: list[bytes], range_value: bytes, value: bytes):
+        """Delete one sorted range index entry."""
+        self.db_index.delete(_range_index_key(index_name, key_parts, range_value, value))
+
+    def iter_range_index(self, index_name: str, key_parts: list[bytes], start_value: bytes | None = None, end_value: bytes | None = None, include_start: bool = True, include_end: bool = True):
+        """Yield values whose range index key falls between start and end values."""
+        prefix = _range_index_prefix(index_name, key_parts)
+        start_key = prefix if start_value is None else prefix + start_value
+        with self.db_index.iterator(start=start_key) as it:
+            for key, value in it:
+                if not key.startswith(prefix):
+                    break
+                range_value = key[len(prefix):].split(_TYPED_ADJ_SEP, 1)[0]
+                if start_value is not None and (range_value < start_value or (range_value == start_value and not include_start)):
+                    continue
+                if end_value is not None and (range_value > end_value or (range_value == end_value and not include_end)):
+                    break
+                yield value
+
     def close(self):
         """Close all LevelDB sub-databases."""
+        self.db_metadata.close()
         self.db_index.close()
         self.db_typed_adj.close()
         self.db_adj.close()
@@ -971,6 +1110,18 @@ class PyRexStore(KVStore):
     def close(self):
         """Close the RocksDB database."""
         self.db.close()
+
+    def put_metadata(self, key: bytes, value: bytes):
+        """Store a metadata key/value pair."""
+        self.db.put(self._key(b"M", key), value, self.write_options)
+
+    def get_metadata(self, key: bytes) -> bytes:
+        """Return a metadata value by key, or ``None``."""
+        return self.db.get(self._key(b"M", key))
+
+    def delete_metadata(self, key: bytes):
+        """Delete a metadata key/value pair."""
+        self.db.delete(self._key(b"M", key), self.write_options)
 
     def put_node(self, node_id: bytes, value: bytes):
         """Store a serialized node by byte key."""
@@ -1154,6 +1305,41 @@ class PyRexStore(KVStore):
         while iterator.valid():
             key = iterator.key()
             if not key.startswith(prefix):
+                break
+            yield iterator.value()
+            iterator.next()
+        iterator.check_status()
+
+    def put_range_index_entry(self, index_name: str, key_parts: list[bytes], range_value: bytes, value: bytes):
+        """Store one sorted range index entry."""
+        self.db.put(_range_index_key(index_name, key_parts, range_value, value), value, self.write_options)
+
+    def put_range_index_entries_bulk(self, entries: list[tuple[str, list[bytes], bytes, bytes]]):
+        """Store many sorted range index entries in one write batch."""
+        batch = self._pyrex.PyWriteBatch()
+        for index_name, key_parts, range_value, value in entries:
+            batch.put(_range_index_key(index_name, key_parts, range_value, value), value)
+        self.db.write(batch, self.write_options)
+
+    def delete_range_index_entry(self, index_name: str, key_parts: list[bytes], range_value: bytes, value: bytes):
+        """Delete one sorted range index entry."""
+        self.db.delete(_range_index_key(index_name, key_parts, range_value, value), self.write_options)
+
+    def iter_range_index(self, index_name: str, key_parts: list[bytes], start_value: bytes | None = None, end_value: bytes | None = None, include_start: bool = True, include_end: bool = True):
+        """Yield values whose range index key falls between start and end values."""
+        prefix = _range_index_prefix(index_name, key_parts)
+        start_key = prefix if start_value is None else prefix + start_value
+        iterator = self.db.new_iterator()
+        iterator.seek(start_key)
+        while iterator.valid():
+            key = iterator.key()
+            if not key.startswith(prefix):
+                break
+            range_value = key[len(prefix):].split(_TYPED_ADJ_SEP, 1)[0]
+            if start_value is not None and (range_value < start_value or (range_value == start_value and not include_start)):
+                iterator.next()
+                continue
+            if end_value is not None and (range_value > end_value or (range_value == end_value and not include_end)):
                 break
             yield iterator.value()
             iterator.next()

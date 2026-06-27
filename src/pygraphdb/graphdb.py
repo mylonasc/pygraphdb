@@ -20,6 +20,10 @@ from .ingestion import EdgeList, NodeList
 from .sampling import SamplingPattern, as_sampling_pattern
 
 
+_NODE_PROPERTY_INDEXES_METADATA_KEY = b"schema:indexes:node_properties"
+_EDGE_PROPERTY_INDEXES_METADATA_KEY = b"schema:indexes:edge_properties"
+
+
 def _normalize_labels(labels):
     """Return deterministic string labels without duplicates.
 
@@ -63,6 +67,22 @@ def _property_value_to_index_bytes(value) -> bytes:
         return item
 
     return json.dumps(normalize(value), sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _property_value_to_range_index_bytes(value) -> bytes | None:
+    """Encode supported scalar values for sorted range indexes."""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        packed = bytearray(struct.pack(">d", float(value)))
+        if packed[0] & 0x80:
+            packed = bytearray(byte ^ 0xFF for byte in packed)
+        else:
+            packed[0] ^= 0x80
+        return b"n" + bytes(packed).hex().encode("ascii")
+    if isinstance(value, str):
+        return b"s" + value.encode("utf-8").hex().encode("ascii")
+    return None
 
 def datetime_to_bytes(dt: datetime.datetime, tzinfo = datetime.timezone.utc) -> bytes:
     """Convert a datetime to big-endian microseconds since the Unix epoch.
@@ -394,8 +414,29 @@ class GraphDB:
         self.entity_serializer = GraphEntityDictSerializer(
             self.serializer
         )
-        self.indexed_node_properties = set(indexed_node_properties or [])
-        self.indexed_edge_properties = set(indexed_edge_properties or [])
+        persisted_node_indexes = self._load_property_index_metadata(_NODE_PROPERTY_INDEXES_METADATA_KEY)
+        persisted_edge_indexes = self._load_property_index_metadata(_EDGE_PROPERTY_INDEXES_METADATA_KEY)
+        self.indexed_node_properties = set(persisted_node_indexes).union(indexed_node_properties or [])
+        self.indexed_edge_properties = set(persisted_edge_indexes).union(indexed_edge_properties or [])
+        if indexed_node_properties is not None:
+            self._persist_property_index_metadata(_NODE_PROPERTY_INDEXES_METADATA_KEY, self.indexed_node_properties)
+        if indexed_edge_properties is not None:
+            self._persist_property_index_metadata(_EDGE_PROPERTY_INDEXES_METADATA_KEY, self.indexed_edge_properties)
+
+    def _load_property_index_metadata(self, key: bytes) -> set[str]:
+        """Load persisted property index definitions from backend metadata."""
+        try:
+            payload = self.store.get_metadata(key)
+        except NotImplementedError:
+            return set()
+        if not payload:
+            return set()
+        return set(json.loads(payload.decode("utf-8")))
+
+    def _persist_property_index_metadata(self, key: bytes, property_names: set[str]) -> None:
+        """Persist property index definitions to backend metadata."""
+        payload = json.dumps(sorted(property_names), separators=(",", ":")).encode("utf-8")
+        self.store.put_metadata(key, payload)
 
     # -----------
     # Node Methods
@@ -451,33 +492,62 @@ class GraphDB:
         self.store.delete_node(node_id)
 
     def _put_node_indexes(self, node: Node):
-        """Maintain label and configured exact property indexes for a node."""
+        """Maintain label and configured property indexes for a node."""
         entries = []
+        range_entries = []
         node_id = node.get_id_bytes
         for label in node.labels:
             entries.append(("node_label", [label.encode("utf-8")], node_id))
         for property_name in self.indexed_node_properties:
             if property_name in node.properties:
+                raw_value = node.properties[property_name]
+                property_value = _property_value_to_index_bytes(raw_value)
                 entries.append((
                     "node_property",
-                    [property_name.encode("utf-8"), _property_value_to_index_bytes(node.properties[property_name])],
+                    [property_name.encode("utf-8"), property_value],
                     node_id,
                 ))
+                for label in node.labels:
+                    entries.append((
+                        "node_label_property",
+                        [label.encode("utf-8"), property_name.encode("utf-8"), property_value],
+                        node_id,
+                    ))
+                range_value = _property_value_to_range_index_bytes(raw_value)
+                if range_value is not None:
+                    range_entries.append(("node_property", [property_name.encode("utf-8")], range_value, node_id))
+                    for label in node.labels:
+                        range_entries.append(("node_label_property", [label.encode("utf-8"), property_name.encode("utf-8")], range_value, node_id))
         if entries:
             self.store.put_index_entries_bulk(entries)
+        if range_entries:
+            self.store.put_range_index_entries_bulk(range_entries)
 
     def _delete_node_indexes(self, node: Node):
-        """Remove label and configured exact property indexes for a node."""
+        """Remove label and configured property indexes for a node."""
         node_id = node.get_id_bytes
         for label in node.labels:
             self.store.delete_index_entry("node_label", [label.encode("utf-8")], node_id)
         for property_name in self.indexed_node_properties:
             if property_name in node.properties:
+                raw_value = node.properties[property_name]
+                property_value = _property_value_to_index_bytes(raw_value)
                 self.store.delete_index_entry(
                     "node_property",
-                    [property_name.encode("utf-8"), _property_value_to_index_bytes(node.properties[property_name])],
+                    [property_name.encode("utf-8"), property_value],
                     node_id,
                 )
+                for label in node.labels:
+                    self.store.delete_index_entry(
+                        "node_label_property",
+                        [label.encode("utf-8"), property_name.encode("utf-8"), property_value],
+                        node_id,
+                    )
+                range_value = _property_value_to_range_index_bytes(raw_value)
+                if range_value is not None:
+                    self.store.delete_range_index_entry("node_property", [property_name.encode("utf-8")], range_value, node_id)
+                    for label in node.labels:
+                        self.store.delete_range_index_entry("node_label_property", [label.encode("utf-8"), property_name.encode("utf-8")], range_value, node_id)
 
     def create_node_property_index(self, property_name: str):
         """Register and rebuild an exact-match node property index.
@@ -493,7 +563,9 @@ class GraphDB:
             10
         """
         self.indexed_node_properties.add(property_name)
-        return self.rebuild_node_property_index(property_name)
+        rebuilt = self.rebuild_node_property_index(property_name)
+        self._persist_property_index_metadata(_NODE_PROPERTY_INDEXES_METADATA_KEY, self.indexed_node_properties)
+        return rebuilt
 
     def rebuild_node_property_index(self, property_name: str):
         """Rebuild an exact-match node property index from stored nodes.
@@ -513,11 +585,23 @@ class GraphDB:
             node = self.get_node(node_id)
             if node is None or property_name not in node.properties:
                 continue
+            raw_value = node.properties[property_name]
             self.store.put_index_entry(
                 "node_property",
-                [property_name.encode("utf-8"), _property_value_to_index_bytes(node.properties[property_name])],
+                [property_name.encode("utf-8"), _property_value_to_index_bytes(raw_value)],
                 node.get_id_bytes,
             )
+            for label in node.labels:
+                self.store.put_index_entry(
+                    "node_label_property",
+                    [label.encode("utf-8"), property_name.encode("utf-8"), _property_value_to_index_bytes(raw_value)],
+                    node.get_id_bytes,
+                )
+            range_value = _property_value_to_range_index_bytes(raw_value)
+            if range_value is not None:
+                self.store.put_range_index_entry("node_property", [property_name.encode("utf-8")], range_value, node.get_id_bytes)
+                for label in node.labels:
+                    self.store.put_range_index_entry("node_label_property", [label.encode("utf-8"), property_name.encode("utf-8")], range_value, node.get_id_bytes)
             rebuilt += 1
         return rebuilt
 
@@ -570,6 +654,10 @@ class GraphDB:
         """
         return [self.get_node(node_id) for node_id in self.iter_node_ids_by_label(label)]
 
+    def count_nodes_by_label(self, label: str) -> int:
+        """Return the number of nodes currently indexed for a label."""
+        return sum(1 for _ in self.iter_node_ids_by_label(label))
+
     def iter_node_ids_by_property(self, property_name: str, value):
         """Yield node IDs from an exact-match property index.
 
@@ -603,6 +691,75 @@ class GraphDB:
             >>> graph_db.nodes_by_property("kind", "drug")  # doctest: +SKIP
         """
         return [self.get_node(node_id) for node_id in self.iter_node_ids_by_property(property_name, value)]
+
+    def count_nodes_by_property(self, property_name: str, value) -> int:
+        """Return the number of nodes currently indexed for an exact property value."""
+        return sum(1 for _ in self.iter_node_ids_by_property(property_name, value))
+
+    def iter_node_ids_by_label_property(self, label: str, property_name: str, value):
+        """Yield node IDs from the composite label/property exact-match index."""
+        yield from self.store.iter_index_prefix(
+            "node_label_property",
+            [label.encode("utf-8"), property_name.encode("utf-8"), _property_value_to_index_bytes(value)],
+        )
+
+    def nodes_by_label_property(self, label: str, property_name: str, value):
+        """Return nodes using the composite label/property exact-match index."""
+        return [self.get_node(node_id) for node_id in self.iter_node_ids_by_label_property(label, property_name, value)]
+
+    def count_nodes_by_label_property(self, label: str, property_name: str, value) -> int:
+        """Return the number of nodes indexed for a label and exact property value."""
+        return sum(1 for _ in self.iter_node_ids_by_label_property(label, property_name, value))
+
+    def iter_node_ids_by_property_range(self, property_name: str, start_value=None, end_value=None, include_start: bool = True, include_end: bool = True):
+        """Yield node IDs from a scalar property range index."""
+        start = None if start_value is None else _property_value_to_range_index_bytes(start_value)
+        end = None if end_value is None else _property_value_to_range_index_bytes(end_value)
+        if (start_value is not None and start is None) or (end_value is not None and end is None):
+            return iter(())
+        if start is not None and end is not None and start[:1] != end[:1]:
+            return iter(())
+        return self.store.iter_range_index(
+            "node_property",
+            [property_name.encode("utf-8")],
+            start,
+            end,
+            include_start,
+            include_end,
+        )
+
+    def nodes_by_property_range(self, property_name: str, start_value=None, end_value=None, include_start: bool = True, include_end: bool = True):
+        """Return nodes using a scalar property range index."""
+        return [self.get_node(node_id) for node_id in self.iter_node_ids_by_property_range(property_name, start_value, end_value, include_start, include_end)]
+
+    def count_nodes_by_property_range(self, property_name: str, start_value=None, end_value=None, include_start: bool = True, include_end: bool = True) -> int:
+        """Return the number of nodes indexed in a scalar property range."""
+        return sum(1 for _ in self.iter_node_ids_by_property_range(property_name, start_value, end_value, include_start, include_end))
+
+    def iter_node_ids_by_label_property_range(self, label: str, property_name: str, start_value=None, end_value=None, include_start: bool = True, include_end: bool = True):
+        """Yield node IDs from a composite label/property range index."""
+        start = None if start_value is None else _property_value_to_range_index_bytes(start_value)
+        end = None if end_value is None else _property_value_to_range_index_bytes(end_value)
+        if (start_value is not None and start is None) or (end_value is not None and end is None):
+            return iter(())
+        if start is not None and end is not None and start[:1] != end[:1]:
+            return iter(())
+        return self.store.iter_range_index(
+            "node_label_property",
+            [label.encode("utf-8"), property_name.encode("utf-8")],
+            start,
+            end,
+            include_start,
+            include_end,
+        )
+
+    def nodes_by_label_property_range(self, label: str, property_name: str, start_value=None, end_value=None, include_start: bool = True, include_end: bool = True):
+        """Return nodes using a composite label/property range index."""
+        return [self.get_node(node_id) for node_id in self.iter_node_ids_by_label_property_range(label, property_name, start_value, end_value, include_start, include_end)]
+
+    def count_nodes_by_label_property_range(self, label: str, property_name: str, start_value=None, end_value=None, include_start: bool = True, include_end: bool = True) -> int:
+        """Return the number of nodes indexed for a label/property range."""
+        return sum(1 for _ in self.iter_node_ids_by_label_property_range(label, property_name, start_value, end_value, include_start, include_end))
 
     def node_key_to_bytes(self, node_key):
         """Normalize a node key to bytes.
@@ -741,35 +898,64 @@ class GraphDB:
         )
 
     def _put_edge_indexes(self, edge: Edge):
-        """Maintain relationship type and configured exact property indexes."""
+        """Maintain relationship type and configured property indexes."""
         entries = []
+        range_entries = []
         edge_type = self.edge_type(edge)
         edge_id = edge.get_id_bytes
         if edge_type is not None:
             entries.append(("edge_type", [str(edge_type).encode("utf-8")], edge_id))
         for property_name in self.indexed_edge_properties:
             if property_name in edge.properties:
+                raw_value = edge.properties[property_name]
+                property_value = _property_value_to_index_bytes(raw_value)
                 entries.append((
                     "edge_property",
-                    [property_name.encode("utf-8"), _property_value_to_index_bytes(edge.properties[property_name])],
+                    [property_name.encode("utf-8"), property_value],
                     edge_id,
                 ))
+                if edge_type is not None:
+                    entries.append((
+                        "edge_type_property",
+                        [str(edge_type).encode("utf-8"), property_name.encode("utf-8"), property_value],
+                        edge_id,
+                    ))
+                range_value = _property_value_to_range_index_bytes(raw_value)
+                if range_value is not None:
+                    range_entries.append(("edge_property", [property_name.encode("utf-8")], range_value, edge_id))
+                    if edge_type is not None:
+                        range_entries.append(("edge_type_property", [str(edge_type).encode("utf-8"), property_name.encode("utf-8")], range_value, edge_id))
         if entries:
             self.store.put_index_entries_bulk(entries)
+        if range_entries:
+            self.store.put_range_index_entries_bulk(range_entries)
 
     def _delete_edge_indexes(self, edge: Edge):
-        """Remove relationship type and configured exact property indexes."""
+        """Remove relationship type and configured property indexes."""
         edge_type = self.edge_type(edge)
         edge_id = edge.get_id_bytes
         if edge_type is not None:
             self.store.delete_index_entry("edge_type", [str(edge_type).encode("utf-8")], edge_id)
         for property_name in self.indexed_edge_properties:
             if property_name in edge.properties:
+                raw_value = edge.properties[property_name]
+                property_value = _property_value_to_index_bytes(raw_value)
                 self.store.delete_index_entry(
                     "edge_property",
-                    [property_name.encode("utf-8"), _property_value_to_index_bytes(edge.properties[property_name])],
+                    [property_name.encode("utf-8"), property_value],
                     edge_id,
                 )
+                if edge_type is not None:
+                    self.store.delete_index_entry(
+                        "edge_type_property",
+                        [str(edge_type).encode("utf-8"), property_name.encode("utf-8"), property_value],
+                        edge_id,
+                    )
+                range_value = _property_value_to_range_index_bytes(raw_value)
+                if range_value is not None:
+                    self.store.delete_range_index_entry("edge_property", [property_name.encode("utf-8")], range_value, edge_id)
+                    if edge_type is not None:
+                        self.store.delete_range_index_entry("edge_type_property", [str(edge_type).encode("utf-8"), property_name.encode("utf-8")], range_value, edge_id)
 
     def rebuild_relationship_type_index(self):
         """Rebuild the relationship type catalog from stored edges.
@@ -805,7 +991,9 @@ class GraphDB:
             7
         """
         self.indexed_edge_properties.add(property_name)
-        return self.rebuild_edge_property_index(property_name)
+        rebuilt = self.rebuild_edge_property_index(property_name)
+        self._persist_property_index_metadata(_EDGE_PROPERTY_INDEXES_METADATA_KEY, self.indexed_edge_properties)
+        return rebuilt
 
     def rebuild_edge_property_index(self, property_name: str):
         """Rebuild an exact-match edge property index from stored edges.
@@ -825,11 +1013,24 @@ class GraphDB:
             edge = self.get_edge(edge_id)
             if edge is None or property_name not in edge.properties:
                 continue
+            raw_value = edge.properties[property_name]
             self.store.put_index_entry(
                 "edge_property",
-                [property_name.encode("utf-8"), _property_value_to_index_bytes(edge.properties[property_name])],
+                [property_name.encode("utf-8"), _property_value_to_index_bytes(raw_value)],
                 edge.get_id_bytes,
             )
+            edge_type = self.edge_type(edge)
+            if edge_type is not None:
+                self.store.put_index_entry(
+                    "edge_type_property",
+                    [str(edge_type).encode("utf-8"), property_name.encode("utf-8"), _property_value_to_index_bytes(raw_value)],
+                    edge.get_id_bytes,
+                )
+            range_value = _property_value_to_range_index_bytes(raw_value)
+            if range_value is not None:
+                self.store.put_range_index_entry("edge_property", [property_name.encode("utf-8")], range_value, edge.get_id_bytes)
+                if edge_type is not None:
+                    self.store.put_range_index_entry("edge_type_property", [str(edge_type).encode("utf-8"), property_name.encode("utf-8")], range_value, edge.get_id_bytes)
             rebuilt += 1
         return rebuilt
 
@@ -861,6 +1062,10 @@ class GraphDB:
             >>> graph_db.edges_by_type("drug-to-protein")  # doctest: +SKIP
         """
         return [self.get_edge(edge_id) for edge_id in self.iter_edge_ids_by_type(edge_type)]
+
+    def count_edges_by_type(self, edge_type: str) -> int:
+        """Return the number of edges currently indexed for a relationship type."""
+        return sum(1 for _ in self.iter_edge_ids_by_type(edge_type))
 
     def iter_edge_ids_by_property(self, property_name: str, value):
         """Yield edge IDs from an exact-match edge property index.
@@ -895,6 +1100,82 @@ class GraphDB:
             >>> graph_db.edges_by_property("score", 1)  # doctest: +SKIP
         """
         return [self.get_edge(edge_id) for edge_id in self.iter_edge_ids_by_property(property_name, value)]
+
+    def count_edges_by_property(self, property_name: str, value) -> int:
+        """Return the number of edges currently indexed for an exact property value."""
+        return sum(1 for _ in self.iter_edge_ids_by_property(property_name, value))
+
+    def iter_edge_ids_by_type_property(self, edge_type: str, property_name: str, value):
+        """Yield edge IDs from the composite type/property exact-match index."""
+        yield from self.store.iter_index_prefix(
+            "edge_type_property",
+            [str(edge_type).encode("utf-8"), property_name.encode("utf-8"), _property_value_to_index_bytes(value)],
+        )
+
+    def edges_by_type_property(self, edge_type: str, property_name: str, value):
+        """Return edges using the composite type/property exact-match index."""
+        return [self.get_edge(edge_id) for edge_id in self.iter_edge_ids_by_type_property(edge_type, property_name, value)]
+
+    def count_edges_by_type_property(self, edge_type: str, property_name: str, value) -> int:
+        """Return the number of edges indexed for a type and exact property value."""
+        return sum(1 for _ in self.iter_edge_ids_by_type_property(edge_type, property_name, value))
+
+    def iter_edge_ids_by_property_range(self, property_name: str, start_value=None, end_value=None, include_start: bool = True, include_end: bool = True):
+        """Yield edge IDs from a scalar property range index."""
+        start = None if start_value is None else _property_value_to_range_index_bytes(start_value)
+        end = None if end_value is None else _property_value_to_range_index_bytes(end_value)
+        if (start_value is not None and start is None) or (end_value is not None and end is None):
+            return iter(())
+        if start is not None and end is not None and start[:1] != end[:1]:
+            return iter(())
+        return self.store.iter_range_index(
+            "edge_property",
+            [property_name.encode("utf-8")],
+            start,
+            end,
+            include_start,
+            include_end,
+        )
+
+    def edges_by_property_range(self, property_name: str, start_value=None, end_value=None, include_start: bool = True, include_end: bool = True):
+        """Return edges using a scalar property range index."""
+        return [self.get_edge(edge_id) for edge_id in self.iter_edge_ids_by_property_range(property_name, start_value, end_value, include_start, include_end)]
+
+    def count_edges_by_property_range(self, property_name: str, start_value=None, end_value=None, include_start: bool = True, include_end: bool = True) -> int:
+        """Return the number of edges indexed in a scalar property range."""
+        return sum(1 for _ in self.iter_edge_ids_by_property_range(property_name, start_value, end_value, include_start, include_end))
+
+    def iter_edge_ids_by_type_property_range(self, edge_type: str, property_name: str, start_value=None, end_value=None, include_start: bool = True, include_end: bool = True):
+        """Yield edge IDs from a composite type/property range index."""
+        start = None if start_value is None else _property_value_to_range_index_bytes(start_value)
+        end = None if end_value is None else _property_value_to_range_index_bytes(end_value)
+        if (start_value is not None and start is None) or (end_value is not None and end is None):
+            return iter(())
+        if start is not None and end is not None and start[:1] != end[:1]:
+            return iter(())
+        return self.store.iter_range_index(
+            "edge_type_property",
+            [str(edge_type).encode("utf-8"), property_name.encode("utf-8")],
+            start,
+            end,
+            include_start,
+            include_end,
+        )
+
+    def edges_by_type_property_range(self, edge_type: str, property_name: str, start_value=None, end_value=None, include_start: bool = True, include_end: bool = True):
+        """Return edges using a composite type/property range index."""
+        return [self.get_edge(edge_id) for edge_id in self.iter_edge_ids_by_type_property_range(edge_type, property_name, start_value, end_value, include_start, include_end)]
+
+    def count_edges_by_type_property_range(self, edge_type: str, property_name: str, start_value=None, end_value=None, include_start: bool = True, include_end: bool = True) -> int:
+        """Return the number of edges indexed for a type/property range."""
+        return sum(1 for _ in self.iter_edge_ids_by_type_property_range(edge_type, property_name, start_value, end_value, include_start, include_end))
+
+    def index_statistics(self) -> dict[str, object]:
+        """Return persisted index definitions visible to the query planner."""
+        return {
+            "indexed_node_properties": tuple(sorted(self.indexed_node_properties)),
+            "indexed_edge_properties": tuple(sorted(self.indexed_edge_properties)),
+        }
 
     def get_typed_adjacency(self, node_id, edge_type: str, direction: str = 'out'):
         """Return typed adjacency records with clean direction semantics.
@@ -1188,11 +1469,18 @@ class GraphDB:
                 index_entries.append(("node_label", [label.encode("utf-8")], n.get_id_bytes))
             for property_name in self.indexed_node_properties:
                 if property_name in n.properties:
+                    property_value = _property_value_to_index_bytes(n.properties[property_name])
                     index_entries.append((
                         "node_property",
-                        [property_name.encode("utf-8"), _property_value_to_index_bytes(n.properties[property_name])],
+                        [property_name.encode("utf-8"), property_value],
                         n.get_id_bytes,
                     ))
+                    for label in n.labels:
+                        index_entries.append((
+                            "node_label_property",
+                            [label.encode("utf-8"), property_name.encode("utf-8"), property_value],
+                            n.get_id_bytes,
+                        ))
         self.store.put_nodes_bulk(to_store)
         if index_entries:
             self.store.put_index_entries_bulk(index_entries)
@@ -1214,7 +1502,9 @@ class GraphDB:
         """
         node_list = NodeList.from_arrow(node_ids, node_values)
         for chunk in node_list.chunks(chunk_size):
+            self._delete_existing_node_indexes_for_columnar_chunk(chunk)
             self.store.ingest_nodes_columnar(chunk, native=native)
+            self._put_node_indexes_for_columnar_chunk(chunk)
         return len(node_list.node_ids)
 
     def ingest_nodes_polars(
@@ -1233,8 +1523,50 @@ class GraphDB:
         """
         node_list = NodeList.from_polars(df, node_id=node_id, node_value=node_value)
         for chunk in node_list.chunks(chunk_size):
+            self._delete_existing_node_indexes_for_columnar_chunk(chunk)
             self.store.ingest_nodes_columnar(chunk, native=native)
+            self._put_node_indexes_for_columnar_chunk(chunk)
         return len(node_list.node_ids)
+
+    def _delete_existing_node_indexes_for_columnar_chunk(self, chunk: NodeList) -> None:
+        """Remove stale indexes before opaque columnar node upserts."""
+        for node_id in chunk.node_ids:
+            old_node = self.get_node(node_id)
+            if old_node is not None:
+                self._delete_node_indexes(old_node)
+
+    def _put_node_indexes_for_columnar_chunk(self, chunk: NodeList) -> None:
+        """Maintain label and configured property indexes for columnar nodes."""
+        entries = []
+        range_entries = []
+        for node_value in chunk.node_values:
+            node = self.entity_serializer.deserialize(node_value, "Node")
+            for label in node.labels:
+                entries.append(("node_label", [label.encode("utf-8")], node.get_id_bytes))
+            for property_name in self.indexed_node_properties:
+                if property_name in node.properties:
+                    raw_value = node.properties[property_name]
+                    property_value = _property_value_to_index_bytes(raw_value)
+                    entries.append((
+                        "node_property",
+                        [property_name.encode("utf-8"), property_value],
+                        node.get_id_bytes,
+                    ))
+                    for label in node.labels:
+                        entries.append((
+                            "node_label_property",
+                            [label.encode("utf-8"), property_name.encode("utf-8"), property_value],
+                            node.get_id_bytes,
+                        ))
+                    range_value = _property_value_to_range_index_bytes(raw_value)
+                    if range_value is not None:
+                        range_entries.append(("node_property", [property_name.encode("utf-8")], range_value, node.get_id_bytes))
+                        for label in node.labels:
+                            range_entries.append(("node_label_property", [label.encode("utf-8"), property_name.encode("utf-8")], range_value, node.get_id_bytes))
+        if entries:
+            self.store.put_index_entries_bulk(entries)
+        if range_entries:
+            self.store.put_range_index_entries_bulk(range_entries)
 
     def serialize_node_value(self, node: Node) -> bytes:
         """Serialize a node for use with columnar node ingestion."""
@@ -1440,11 +1772,18 @@ class GraphDB:
                 index_entries.append(("edge_type", [str(edge_type).encode("utf-8")], e.get_id_bytes))
             for property_name in self.indexed_edge_properties:
                 if property_name in e.properties:
+                    property_value = _property_value_to_index_bytes(e.properties[property_name])
                     index_entries.append((
                         "edge_property",
-                        [property_name.encode("utf-8"), _property_value_to_index_bytes(e.properties[property_name])],
+                        [property_name.encode("utf-8"), property_value],
                         e.get_id_bytes,
                     ))
+                    if edge_type is not None:
+                        index_entries.append((
+                            "edge_type_property",
+                            [str(edge_type).encode("utf-8"), property_name.encode("utf-8"), property_value],
+                            e.get_id_bytes,
+                        ))
             # adjacency accum update
             adjacency_accumulator.setdefault(_source, {'target' : [], 'source' : []})
             adjacency_accumulator[_source]['source'].append(e.get_id_bytes)
@@ -1528,6 +1867,7 @@ class GraphDB:
         edge_list = EdgeList.from_arrow(edge_ids, sources, targets, edge_types, edge_values)
         for chunk in edge_list.chunks(chunk_size):
             self.store.ingest_edges_columnar(chunk, append_only=append_only, native=native)
+            self._put_edge_property_indexes_for_columnar_chunk(chunk)
         return len(edge_list.edge_ids)
 
     def ingest_edges_polars(
@@ -1560,7 +1900,42 @@ class GraphDB:
         )
         for chunk in edge_list.chunks(chunk_size):
             self.store.ingest_edges_columnar(chunk, append_only=append_only, native=native)
+            self._put_edge_property_indexes_for_columnar_chunk(chunk)
         return len(edge_list.edge_ids)
+
+    def _put_edge_property_indexes_for_columnar_chunk(self, chunk: EdgeList) -> None:
+        """Maintain configured edge property indexes for columnar edges."""
+        if not self.indexed_edge_properties:
+            return
+        entries = []
+        range_entries = []
+        for edge_value in chunk.edge_values:
+            edge = self.entity_serializer.deserialize(edge_value, "Edge")
+            edge_type = self.edge_type(edge)
+            for property_name in self.indexed_edge_properties:
+                if property_name in edge.properties:
+                    raw_value = edge.properties[property_name]
+                    property_value = _property_value_to_index_bytes(raw_value)
+                    entries.append((
+                        "edge_property",
+                        [property_name.encode("utf-8"), property_value],
+                        edge.get_id_bytes,
+                    ))
+                    if edge_type is not None:
+                        entries.append((
+                            "edge_type_property",
+                            [str(edge_type).encode("utf-8"), property_name.encode("utf-8"), property_value],
+                            edge.get_id_bytes,
+                        ))
+                    range_value = _property_value_to_range_index_bytes(raw_value)
+                    if range_value is not None:
+                        range_entries.append(("edge_property", [property_name.encode("utf-8")], range_value, edge.get_id_bytes))
+                        if edge_type is not None:
+                            range_entries.append(("edge_type_property", [str(edge_type).encode("utf-8"), property_name.encode("utf-8")], range_value, edge.get_id_bytes))
+        if entries:
+            self.store.put_index_entries_bulk(entries)
+        if range_entries:
+            self.store.put_range_index_entries_bulk(range_entries)
 
     def query(self, cypher: str, parameters: Optional[dict[str, object]] = None):
         """Execute a supported read-only Cypher query.

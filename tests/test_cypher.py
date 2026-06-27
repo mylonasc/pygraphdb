@@ -2,8 +2,8 @@ import pytest
 
 from pygraphdb.graphdb import Edge, Node
 from pygraphdb.cypher import QueryResult, _split_top_level_args, execute, parse, plan
-from pygraphdb.cypher_ast import Parameter
-from pygraphdb.cypher_plan import Expand, Limit, NodeAllScan, NodeByIdSeek, NodeLabelScan, NodePropertySeek, ProcedureCall, Project, RelationshipTypeScan
+from pygraphdb.cypher_ast import MultiMatchQuery, Parameter
+from pygraphdb.cypher_plan import Expand, Limit, NodeAllScan, NodeByIdSeek, NodeLabelScan, NodePropertySeek, ProcedureCall, Project, RelationshipPropertyRangeSeek, RelationshipPropertySeek, RelationshipTypeScan
 from pygraphdb.cypher_parser import parse_literal
 from pygraphdb.cypher_runtime import QueryContext, execute_match, execute_node_scan, expand_typed
 
@@ -105,6 +105,27 @@ def test_cypher_label_scan_filters_property_with_index_when_registered(graph_db)
     assert [record["n"].get_id for record in result] == ["drug-1"]
 
 
+def test_cypher_label_property_filter_uses_composite_index_when_registered(graph_db):
+    graph_db.put_nodes([
+        Node(node_id="drug-1", labels=["Drug"], properties={"name": "Aspirin"}),
+        Node(node_id="drug-2", labels=["Drug"], properties={"name": "Ibuprofen"}),
+    ])
+    graph_db.create_node_property_index("name")
+    calls = []
+    original = graph_db.iter_node_ids_by_label_property
+
+    def iter_node_ids_by_label_property(label, property_name, value):
+        calls.append((label, property_name, value))
+        yield from original(label, property_name, value)
+
+    graph_db.iter_node_ids_by_label_property = iter_node_ids_by_label_property
+
+    result = graph_db.query('MATCH (n:Drug {name: "Aspirin"}) RETURN n.id')
+
+    assert result.records == [{"n.id": "drug-1"}]
+    assert calls == [("Drug", "name", "Aspirin")]
+
+
 def test_cypher_label_scan_filters_property_without_registered_index(graph_db):
     graph_db.put_nodes([
         Node(node_id="drug-1", labels=["Drug"], properties={"name": "Aspirin"}),
@@ -188,6 +209,26 @@ def test_cypher_node_scan_where_comparison_and_parameter_without_backend():
     result = execute(graph, "MATCH (n:Person) WHERE n.age >= $age RETURN n.id", parameters={"age": 35})
 
     assert result.records == [{"n.id": "n2"}]
+
+
+def test_cypher_node_scan_where_comparison_uses_range_index(graph_db):
+    graph_db.put_node(Node(node_id="n1", labels=["Person"], properties={"age": 30}))
+    graph_db.put_node(Node(node_id="n2", labels=["Person"], properties={"age": 40}))
+    graph_db.put_node(Node(node_id="n3", labels=["Person"], properties={"age": 50}))
+    graph_db.create_node_property_index("age")
+    original = graph_db.iter_node_ids_by_label_property_range
+    calls = []
+
+    def tracked(*args, **kwargs):
+        calls.append((args, kwargs))
+        return original(*args, **kwargs)
+
+    graph_db.iter_node_ids_by_label_property_range = tracked
+
+    result = graph_db.query("MATCH (n:Person) WHERE n.age >= $age RETURN n.id", parameters={"age": 35})
+
+    assert calls == [(('Person', 'age', 35, None, True, True), {})]
+    assert result.records == [{"n.id": "n2"}, {"n.id": "n3"}]
 
 
 def test_cypher_node_scan_where_inequality_without_backend():
@@ -345,6 +386,69 @@ def test_cypher_unanchored_relationship_scan_type_alternatives_without_backend()
     assert result.records == [{"r.id": "e1"}, {"r.id": "e2"}]
 
 
+def test_cypher_multiple_match_clauses_chain_shared_variables(graph_db):
+    graph_db.put_nodes([
+        Node(node_id="drug-1", labels=["Drug"], properties={"name": "A"}),
+        Node(node_id="drug-2", labels=["Drug"], properties={"name": "B"}),
+        Node(node_id="protein-1", labels=["Protein"], properties={"kind": "target"}),
+        Node(node_id="protein-2", labels=["Protein"]),
+    ])
+    graph_db.put_edges_bulk([
+        Edge(edge_id="e1", source="drug-1", target="protein-1", properties={"type": "T"}),
+        Edge(edge_id="e2", source="drug-2", target="protein-2", properties={"type": "T"}),
+    ])
+
+    result = graph_db.query("MATCH (d:Drug {name: 'A'}) MATCH (d)-[r:T]->(p) RETURN d.id, r.id, p.id")
+    parsed = parse("MATCH (d:Drug {name: 'A'}) MATCH (d)-[r:T]->(p) RETURN d.id, r.id, p.id")
+
+    assert isinstance(parsed, MultiMatchQuery)
+    assert result.records == [{"d.id": "drug-1", "r.id": "e1", "p.id": "protein-1"}]
+
+
+def test_cypher_multiple_match_clauses_filter_bound_node_identity(graph_db):
+    graph_db.put_nodes([
+        Node(node_id="drug-1", labels=["Drug"]),
+        Node(node_id="protein-1", labels=["Protein"], properties={"kind": "target"}),
+        Node(node_id="protein-2", labels=["Protein"]),
+    ])
+    graph_db.put_edges_bulk([
+        Edge(edge_id="e1", source="drug-1", target="protein-1", properties={"type": "T"}),
+        Edge(edge_id="e2", source="drug-1", target="protein-2", properties={"type": "T"}),
+    ])
+
+    result = graph_db.query("MATCH (p:Protein {kind: 'target'}) MATCH (d)-[r:T]->(p) RETURN d.id, r.id, p.id")
+
+    assert result.records == [{"d.id": "drug-1", "r.id": "e1", "p.id": "protein-1"}]
+
+
+def test_cypher_multiple_match_clauses_support_where_order_limit(graph_db):
+    graph_db.put_nodes([
+        Node(node_id="d", labels=["Drug"]),
+        Node(node_id="p1", properties={"rank": 2}),
+        Node(node_id="p2", properties={"rank": 1}),
+    ])
+    graph_db.put_edges_bulk([
+        Edge(edge_id="e1", source="d", target="p1", properties={"type": "T", "score": 0.5}),
+        Edge(edge_id="e2", source="d", target="p2", properties={"type": "T", "score": 0.9}),
+    ])
+
+    result = graph_db.query("MATCH (d:Drug) MATCH (d)-[r:T]->(p) WHERE r.score > 0.6 RETURN p.id ORDER BY p.rank LIMIT 1")
+
+    assert result.records == [{"p.id": "p2"}]
+
+
+def test_cypher_multiple_match_clauses_support_anchored_clause(graph_db):
+    graph_db.put_nodes([
+        Node(node_id="d", labels=["Drug"]),
+        Node(node_id="p"),
+    ])
+    graph_db.put_edge(Edge(edge_id="e", source="d", target="p", properties={"type": "T"}))
+
+    result = graph_db.query("MATCH (d:Drug) MATCH (d {id: 'd'})-[r:T]->(p) RETURN d.id, r.id, p.id")
+
+    assert result.records == [{"d.id": "d", "r.id": "e", "p.id": "p"}]
+
+
 def test_cypher_unanchored_relationship_scan_where_and_return_star_without_backend():
     graph = FakeCypherGraph()
     graph.put_node(Node(node_id="a"))
@@ -358,6 +462,52 @@ def test_cypher_unanchored_relationship_scan_where_and_return_star_without_backe
     assert result.columns == ("a", "r", "b")
     assert result.records[0]["r"].get_id == "e2"
     assert result.records[0]["b"].get_id == "c"
+
+
+def test_cypher_unanchored_relationship_scan_where_equality_uses_edge_type_property_index(graph_db):
+    graph_db.put_node(Node(node_id="a"))
+    graph_db.put_node(Node(node_id="b"))
+    graph_db.put_node(Node(node_id="c"))
+    graph_db.put_edge(Edge(edge_id="e1", source="a", target="b", properties={"type": "T", "score": 0.5}))
+    graph_db.put_edge(Edge(edge_id="e2", source="a", target="c", properties={"type": "T", "score": 0.9}))
+    graph_db.create_edge_property_index("score")
+    original = graph_db.iter_edge_ids_by_type_property
+    calls = []
+
+    def tracked(*args, **kwargs):
+        calls.append((args, kwargs))
+        return original(*args, **kwargs)
+
+    graph_db.iter_edge_ids_by_type_property = tracked
+
+    result = graph_db.query("MATCH (a)-[r:T]->(b) WHERE r.score = 0.9 RETURN r.id, b.id")
+
+    assert calls == [(("T", "score", 0.9), {})]
+    assert result.records == [{"r.id": "e2", "b.id": "c"}]
+
+
+def test_cypher_unanchored_relationship_scan_where_range_uses_edge_type_property_range_index(graph_db):
+    graph_db.put_node(Node(node_id="a"))
+    graph_db.put_node(Node(node_id="b"))
+    graph_db.put_node(Node(node_id="c"))
+    graph_db.put_node(Node(node_id="d"))
+    graph_db.put_edge(Edge(edge_id="e1", source="a", target="b", properties={"type": "T", "score": 0.5}))
+    graph_db.put_edge(Edge(edge_id="e2", source="a", target="c", properties={"type": "T", "score": 0.9}))
+    graph_db.put_edge(Edge(edge_id="e3", source="a", target="d", properties={"type": "T", "score": 1.2}))
+    graph_db.create_edge_property_index("score")
+    original = graph_db.iter_edge_ids_by_type_property_range
+    calls = []
+
+    def tracked(*args, **kwargs):
+        calls.append((args, kwargs))
+        return original(*args, **kwargs)
+
+    graph_db.iter_edge_ids_by_type_property_range = tracked
+
+    result = graph_db.query("MATCH (a)-[r:T]->(b) WHERE r.score > $score RETURN r.id", parameters={"score": 0.7})
+
+    assert calls == [(("T", "score", 0.7, None, False, True), {})]
+    assert result.records == [{"r.id": "e2"}, {"r.id": "e3"}]
 
 
 def test_cypher_reverse_unanchored_relationship_scan_without_backend():
@@ -948,6 +1098,25 @@ def test_logical_plan_for_relationship_scan():
 
     assert isinstance(logical_plan.operators[0], RelationshipTypeScan)
     assert logical_plan.operators[0].edge_types == ("A", "B")
+
+
+def test_logical_plan_for_relationship_scan_property_predicates():
+    exact_plan = plan("MATCH (a)-[r:T]->(b) WHERE r.score = 1 RETURN r.id")
+    range_plan = plan("MATCH (a)-[r:T]->(b) WHERE r.score >= 1 RETURN r.id")
+
+    assert isinstance(exact_plan.operators[1], RelationshipPropertySeek)
+    assert exact_plan.operators[1].property_name == "score"
+    assert isinstance(range_plan.operators[1], RelationshipPropertyRangeSeek)
+    assert range_plan.operators[1].operator == ">="
+
+
+def test_logical_plan_for_multiple_match_clauses():
+    logical_plan = plan("MATCH (d:Drug) MATCH (d)-[r:T]->(p) RETURN d.id, p.id LIMIT 1")
+
+    assert isinstance(logical_plan.operators[0], NodeLabelScan)
+    assert isinstance(logical_plan.operators[1], RelationshipTypeScan)
+    assert isinstance(logical_plan.operators[-2], Project)
+    assert isinstance(logical_plan.operators[-1], Limit)
 
 
 def test_query_context_caches_node_and_edge_hydration_without_backend():

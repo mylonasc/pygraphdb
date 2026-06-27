@@ -1,6 +1,11 @@
 import datetime
 
-from pygraphdb.graphdb import Edge, Node, TimeIndexedEdge, bytes_to_datetime, datetime_to_bytes
+import pytest
+
+from pygraphdb.graphdb import Edge, GraphDB, Node, TimeIndexedEdge, bytes_to_datetime, datetime_to_bytes
+from pygraphdb.serializers import PickleSerializer
+
+from .conftest import BACKEND_PARAMS
 
 
 def test_datetime_byte_helpers_round_trip():
@@ -136,6 +141,44 @@ def test_exact_node_property_index_supports_lookup(graph_db):
     assert [node.get_id for node in graph_db.nodes_by_property("kind", "drug")] == ["drug-1"]
 
 
+@pytest.mark.parametrize("backend", BACKEND_PARAMS, ids=lambda param: param[0] if isinstance(param, tuple) else str(param))
+def test_node_property_index_definitions_persist_after_reopen(backend, tmp_path):
+    backend_name, store_cls = backend
+    path = tmp_path / backend_name
+    graph = GraphDB(store_cls(path=str(path)), PickleSerializer())
+    try:
+        graph.create_node_property_index("kind")
+    finally:
+        graph.close()
+
+    reopened = GraphDB(store_cls(path=str(path)), PickleSerializer())
+    try:
+        assert "kind" in reopened.indexed_node_properties
+        reopened.put_node(Node(node_id="drug-1", properties={"kind": "drug"}))
+        assert [node.get_id for node in reopened.nodes_by_property("kind", "drug")] == ["drug-1"]
+    finally:
+        reopened.close()
+
+
+@pytest.mark.parametrize("backend", BACKEND_PARAMS, ids=lambda param: param[0] if isinstance(param, tuple) else str(param))
+def test_edge_property_index_definitions_persist_after_reopen(backend, tmp_path):
+    backend_name, store_cls = backend
+    path = tmp_path / backend_name
+    graph = GraphDB(store_cls(path=str(path)), PickleSerializer())
+    try:
+        graph.create_edge_property_index("score")
+    finally:
+        graph.close()
+
+    reopened = GraphDB(store_cls(path=str(path)), PickleSerializer())
+    try:
+        assert "score" in reopened.indexed_edge_properties
+        reopened.put_edge(Edge(edge_id="e1", source="n1", target="n2", properties={"type": "rel", "score": 1}))
+        assert [edge.get_id for edge in reopened.edges_by_property("score", 1)] == ["e1"]
+    finally:
+        reopened.close()
+
+
 def test_update_node_creates_or_merges_properties(graph_db):
     def merge(old, new):
         return {**old, **new}
@@ -167,6 +210,42 @@ def test_label_and_property_indexes_can_be_rebuilt(graph_db):
     assert graph_db.rebuild_label_index() == 2
     assert graph_db.rebuild_node_property_index("kind") == 2
     assert {node.get_id for node in graph_db.nodes_by_label("Drug")} == {"drug-1", "drug-2"}
+
+
+def test_index_cardinality_helpers(graph_db):
+    graph_db.put_nodes([
+        Node(node_id="drug-1", labels=["Drug"], properties={"kind": "drug"}),
+        Node(node_id="drug-2", labels=["Drug"], properties={"kind": "drug"}),
+        Node(node_id="protein-1", labels=["Protein"], properties={"kind": "protein"}),
+    ])
+    graph_db.put_edges_bulk([
+        Edge(edge_id="e1", source="drug-1", target="protein-1", properties={"type": "binds", "score": 1}),
+        Edge(edge_id="e2", source="drug-2", target="protein-1", properties={"type": "binds", "score": 2}),
+    ])
+    graph_db.create_node_property_index("kind")
+    graph_db.create_edge_property_index("score")
+
+    assert graph_db.count_nodes_by_label("Drug") == 2
+    assert graph_db.count_nodes_by_property("kind", "drug") == 2
+    assert [node.get_id for node in graph_db.nodes_by_label_property("Drug", "kind", "drug")] == ["drug-1", "drug-2"]
+    assert graph_db.count_nodes_by_label_property("Drug", "kind", "drug") == 2
+    graph_db.put_node(Node(node_id="drug-3", labels=["Drug"], properties={"age": 20}))
+    graph_db.put_node(Node(node_id="drug-4", labels=["Drug"], properties={"age": 40}))
+    graph_db.create_node_property_index("age")
+    assert [node.get_id for node in graph_db.nodes_by_property_range("age", 25, 45)] == ["drug-4"]
+    assert [node.get_id for node in graph_db.nodes_by_label_property_range("Drug", "age", 20, 40, include_start=False)] == ["drug-4"]
+    assert graph_db.count_nodes_by_label_property_range("Drug", "age", 20, 40) == 2
+    assert graph_db.count_edges_by_type("binds") == 2
+    assert graph_db.count_edges_by_property("score", 1) == 1
+    assert [edge.get_id for edge in graph_db.edges_by_type_property("binds", "score", 1)] == ["e1"]
+    assert graph_db.count_edges_by_type_property("binds", "score", 1) == 1
+    assert [edge.get_id for edge in graph_db.edges_by_property_range("score", 1, 2)] == ["e1", "e2"]
+    assert [edge.get_id for edge in graph_db.edges_by_type_property_range("binds", "score", 1, 2, include_start=False)] == ["e2"]
+    assert graph_db.count_edges_by_type_property_range("binds", "score", 1, 2) == 2
+    assert graph_db.index_statistics() == {
+        "indexed_node_properties": ("age", "kind"),
+        "indexed_edge_properties": ("score",),
+    }
 
 
 def test_bulk_edges(graph_db):

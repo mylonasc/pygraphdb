@@ -90,9 +90,11 @@ def test_graphdb_ingests_serialized_nodes_and_edges_from_columns(tmp_path):
     pytest.importorskip("lmdb")
     graph_db = GraphDB(LMDBStore(path=str(tmp_path / "lmdb")), PickleSerializer())
     try:
+        graph_db.create_node_property_index("kind")
+        graph_db.create_edge_property_index("score")
         nodes = [
-            Node(node_id="drug-1", properties={"kind": "drug"}),
-            Node(node_id="protein-1", properties={"kind": "protein"}),
+            Node(node_id="drug-1", labels=["Drug"], properties={"kind": "drug"}),
+            Node(node_id="protein-1", labels=["Protein"], properties={"kind": "protein"}),
         ]
         node_values = [graph_db.serialize_node_value(node) for node in nodes]
 
@@ -114,10 +116,32 @@ def test_graphdb_ingests_serialized_nodes_and_edges_from_columns(tmp_path):
         ) == 1
 
         assert graph_db.get_node(b"drug-1").properties == {"kind": "drug"}
+        assert [node.get_id for node in graph_db.nodes_by_label("Drug")] == ["drug-1"]
+        assert [node.get_id for node in graph_db.nodes_by_property("kind", "drug")] == ["drug-1"]
         assert graph_db.get_edge(b"d1-p1").properties["score"] == 0.9
+        assert [edge.get_id for edge in graph_db.edges_by_property("score", 0.9)] == ["d1-p1"]
         assert graph_db.neighbors_by_edge_type("drug-1", "drug-to-protein", direction="out") == [b"protein-1"]
         assert graph_db.neighbors_by_edge_type("protein-1", "drug-to-protein", direction="in") == [b"drug-1"]
         assert graph_db.get_adjacency_list(b"drug-1", direction="any") == []
+    finally:
+        graph_db.close()
+
+
+def test_columnar_node_ingestion_removes_stale_indexes(tmp_path):
+    pytest.importorskip("lmdb")
+    graph_db = GraphDB(LMDBStore(path=str(tmp_path / "lmdb")), PickleSerializer())
+    try:
+        graph_db.create_node_property_index("kind")
+        old_node = Node(node_id="n1", labels=["Old"], properties={"kind": "old"})
+        new_node = Node(node_id="n1", labels=["New"], properties={"kind": "new"})
+
+        graph_db.put_node(old_node)
+        graph_db.ingest_nodes_arrow(["n1"], [graph_db.serialize_node_value(new_node)])
+
+        assert graph_db.nodes_by_label("Old") == []
+        assert [node.get_id for node in graph_db.nodes_by_label("New")] == ["n1"]
+        assert graph_db.nodes_by_property("kind", "old") == []
+        assert [node.get_id for node in graph_db.nodes_by_property("kind", "new")] == ["n1"]
     finally:
         graph_db.close()
 

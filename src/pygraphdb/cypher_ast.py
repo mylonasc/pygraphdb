@@ -88,6 +88,52 @@ class MatchQuery:
 
 
 @dataclass(frozen=True)
+class NodePatternClause:
+    """One node pattern in a multi-clause ``MATCH`` query."""
+
+    variable: str
+    label: str | None = None
+    property_name: str | None = None
+    property_value: object = None
+    labels: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class RelationshipPatternClause:
+    """One relationship pattern in a multi-clause ``MATCH`` query."""
+
+    source_var: str
+    rel_var: str | None
+    edge_type: str
+    target_var: str
+    direction: str = "out"
+    edge_types: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class AnchoredPatternClause:
+    """One anchored traversal pattern in a multi-clause ``MATCH`` query."""
+
+    source_var: str
+    source_id: str
+    hops: tuple[TraversalHop, ...]
+
+
+@dataclass(frozen=True)
+class MultiMatchQuery:
+    """Parsed query containing multiple ``MATCH`` clauses."""
+
+    clauses: tuple[object, ...]
+    returns: tuple[str, ...]
+    where: object | None = None
+    projections: tuple[str, ...] = ()
+    order_by: tuple[OrderItem, ...] = ()
+    skip: int | None = None
+    limit: int | None = None
+    distinct: bool = False
+
+
+@dataclass(frozen=True)
 class SampleTypedPathsCall:
     """Parsed ``pg.sample_typed_paths`` procedure call."""
 
